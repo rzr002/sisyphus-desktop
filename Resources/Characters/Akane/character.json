@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "新条茜 · Q 版",
+  "image": "sprite.png",
+  "columns": 4,
+  "rows": 3,
+  "renderHeight": 104,
+  "facesRight": true,
+  "animations": {
+    "idle": { "frames": [0, 0, 0, 0, 0, 0, 1, 0], "fps": 3 },
+    "walk": { "frames": [2, 3], "fps": 6 },
+    "climb": { "frames": [4, 5, 6, 7], "fps": 4, "anchor": [0.5, 0.79] },
+    "fall": { "frames": [8], "fps": 1 },
+    "drag": { "frames": [9, 10], "fps": 3 },
+    "recover": { "frames": [11], "fps": 1 }
+  }
+}
