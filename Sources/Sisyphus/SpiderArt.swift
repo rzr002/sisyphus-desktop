@@ -10,9 +10,15 @@ enum SpiderArt {
     private static let red = NSColor.rgb(0xE34645).cgColor
     private static let redDark = NSColor.rgb(0xAB3349).cgColor
     private static let silk = NSColor.rgb(0x843449).cgColor
+    private static func ramp(_ colors: [UInt32], _ stops: [CGFloat]) -> CGGradient {
+        CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors.map { NSColor.rgb($0).cgColor } as CFArray, locations: stops)!
+    }
+    private static let maskLight = ramp([0xFFAA89, 0xFF6654, 0xD83240, 0x8D2947, 0x392B45], [0, 0.22, 0.54, 0.81, 1])
+    private static let glass = ramp([0xFFFFFF, 0xF4FDFF, 0xBADFEA, 0x78A8C0], [0, 0.36, 0.73, 1])
+    private static let chest = ramp([0x782947, 0xDB3442, 0xFF9174], [0, 0.57, 1])
 
     static func draw(in c: CGContext, phase: Phase, time: Double, facing: CGFloat, angle: CGFloat,
-                     wristSide: CGFloat, grip: CGPoint, aim: CGPoint, progress: CGFloat) {
+                     wristSide: CGFloat, grip: CGPoint, aim: CGPoint, progress: CGFloat, depth: CGFloat = 0) {
         let walking = phase == .searching || phase == .walking
         let climbing = [.climbing, .reaching, .traversing].contains(phase)
         let tethered = phase.usesWeb
@@ -24,6 +30,8 @@ enum SpiderArt {
         let inversion = phase == .webRappel ? facing * .pi * progress : 0
         let openForCatch = min(1, max(0, (progress - 0.26) / 0.33))
         let kick = sin(.pi * progress)
+        let turn = tethered ? 0.45 * sin(angle) * facing + 0.5 * depth : 0
+        let volume: CGFloat = tethered ? 0.47 + 0.36 * depth : 0
         if phase == .webRappel {
             c.rotate(by: inversion)
         } else if phase == .webLaunch {
@@ -33,6 +41,10 @@ enum SpiderArt {
         } else if phase == .webVault {
             let eased = progress * progress * (3 - 2 * progress)
             c.rotate(by: -facing * 2 * .pi * eased)
+        } else if phase == .webRescue {
+            c.translateBy(x: aim.x, y: aim.y)
+            c.rotate(by: -facing * (0.075 + 0.085 * (1 - progress)))
+            c.translateBy(x: -aim.x, y: -aim.y)
         } else if phase == .webSwinging || phase == .webPulling || phase == .webKick {
             // Pivot around the moving, load-bearing wrist: the ink touches the line even in a hard lean.
             let lean = phase == .webPulling ? facing * 0.22 : max(-0.24, min(0.24, angle * 0.34 - (phase == .webKick ? facing * kick * 0.18 : 0)))
@@ -59,6 +71,13 @@ enum SpiderArt {
             stroke([root, joint, tip], boot ? blue : redDark, width)
             let cuff = p(joint.x * 0.55 + tip.x * 0.45, joint.y * 0.55 + tip.y * 0.45)
             stroke([cuff, tip], red, width + 0.2)
+            if tethered {
+                // A narrow lit ridge against the shaded tube, rather than a flat stick.
+                let dx = joint.x-root.x, dy = joint.y-root.y, len = max(1, hypot(dx,dy))
+                let n = p(-dy/len * width * 0.19, dx/len * width * 0.19)
+                stroke([p(root.x+dx*0.2+n.x,root.y+dy*0.2+n.y),p(joint.x+n.x,joint.y+n.y)],
+                       boot ? NSColor.rgb(0x527FA9).cgColor : NSColor.rgb(0xF27466).cgColor, width * 0.20)
+            }
         }
         let leftHand: CGPoint, rightHand: CGPoint, leftKnee: CGPoint, rightKnee: CGPoint
         let leftFoot: CGPoint, rightFoot: CGPoint
@@ -113,6 +132,13 @@ enum SpiderArt {
                 loaded = active; free = p(freeSide * 22, -3)
                 leftKnee = p(-18, -12); rightKnee = p(15, -9)
                 leftFoot = p(-13, -23); rightFoot = p(20, -17)
+            case .webRescue:
+                // Counterbalance the shooting shoulder, then draw one knee up before impact.
+                free = shooting; loaded = p(-24 + 5 * progress, -5 - 9 * progress)
+                leftKnee = p(-12 - 9 * progress, -12 + 9 * progress)
+                leftFoot = p(-7 - 7 * progress, -22 + 12 * progress)
+                rightKnee = p(7 + 5 * progress, -20 + 6 * progress)
+                rightFoot = p(2 + 12 * progress, -32 + 6 * progress)
             case .webHandoff:
                 loaded = active; free = shooting
                 leftKnee = p(-16, -17); rightKnee = p(17, -6)
@@ -147,18 +173,31 @@ enum SpiderArt {
             leftFoot = p(-7 + stride * 9, -31 + max(0, stride) * 4)
             rightFoot = p(8 - stride * 9, -31 + max(0, -stride) * 4)
         }
-        limb(p(-4,-9), leftKnee, leftFoot, 6.2, true)
-        limb(p(4,-9), rightKnee, rightFoot, 6.8, true)
+        // Stage the far limbs behind the chest; the near boot and glove come forward as the body turns.
+        let towardsLens = volume * max(0, depth)
+        let boot = p(rightFoot.x + (rightKnee.x - rightFoot.x) * 0.28 * towardsLens + 1.7 * towardsLens,
+                     rightFoot.y + (rightKnee.y - rightFoot.y) * 0.28 * towardsLens)
+        limb(p(-4,-9), leftKnee, leftFoot, 6.2 - volume, true)
+        limb(p(4,-9), rightKnee, boot, 6.8 + volume * 1.8, true)
         stroke([leftFoot, p(leftFoot.x - 3, leftFoot.y - 1)], ink, 8)
         stroke([leftFoot, p(leftFoot.x - 3, leftFoot.y - 1)], redDark, 5.8)
-        stroke([rightFoot, p(rightFoot.x + 3, rightFoot.y - 1)], ink, 8)
-        stroke([rightFoot, p(rightFoot.x + 3, rightFoot.y - 1)], red, 5.8)
+        stroke([boot, p(boot.x + 3 + volume, boot.y - 1)], ink, 8 + volume * 2)
+        stroke([boot, p(boot.x + 3 + volume, boot.y - 1)], red, 5.8 + volume * 2)
+        if towardsLens > 0.2 {
+            stroke([p(boot.x - 1, boot.y - 1), p(boot.x + 3, boot.y - 2)], redDark, 1.5 + towardsLens)
+        }
+        if tethered { limb(p(-7,2), leftElbow, leftHand, 4.9 - 0.6 * volume, false) }
         let torso = CGMutablePath()
         torso.move(to: p(-9, 5)); torso.addQuadCurve(to: p(9,5), control: p(0,10))
         torso.addQuadCurve(to: p(6,-13), control: p(12,-3))
         torso.addQuadCurve(to: p(-6,-13), control: p(0,-17))
         torso.addQuadCurve(to: p(-9,5), control: p(-11,-3)); torso.closeSubpath()
         shape(torso, climbing ? blue : red)
+        if tethered {
+            c.saveGState(); c.addPath(torso); c.clip()
+            c.drawLinearGradient(chest, start: p(-8,-8), end: p(7,5), options: [.drawsBeforeStartLocation,.drawsAfterEndLocation])
+            c.restoreGState()
+        }
         stroke([p(-7,-6),p(-6,-11),p(4,-12)], climbing ? blueLight : blue, 2)
         // Eight legs surrounding the tiny emblem keep it legible in the back view.
         let emblem = climbing ? red : ink
@@ -169,8 +208,8 @@ enum SpiderArt {
             }
         }
         stroke([p(0,-1),p(0,-5)], emblem, 2.6)
-        limb(p(-7,2), leftElbow, leftHand, 5.1, false)
-        limb(p(7,2), rightElbow, rightHand, 5.3, false)
+        if !tethered { limb(p(-7,2), leftElbow, leftHand, 5.1, false) }
+        limb(p(7,2), rightElbow, rightHand, 5.3 + volume * 1.2, false)
         let head = CGMutablePath()
         head.move(to: p(0,4))
         head.addCurve(to: p(-16.5,20), control1: p(-5,4), control2: p(-15,11))
@@ -179,34 +218,49 @@ enum SpiderArt {
         head.addCurve(to: p(0,4), control1: p(15,11), control2: p(5,4)); head.closeSubpath()
         shape(head, red, 2)
         c.saveGState(); c.addPath(head); c.clip()
-        let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [NSColor.rgb(0xFF7060).cgColor, red, redDark] as CFArray, locations: [0,0.52,1])!
-        c.drawLinearGradient(gradient, start: p(-13,34), end: p(13,6), options: [.drawsBeforeStartLocation,.drawsAfterEndLocation])
+        let light = p(-5 * facing, 27)
+        c.drawRadialGradient(maskLight, startCenter: light, startRadius: 0, endCenter: light, endRadius: 27,
+                             options: .drawsAfterEndLocation)
+        // Wrap the web mask and both lenses around the same turning hemisphere.
+        let yaw = 0.58 * turn, pitch = 0.13 * depth
+        let cy = cos(yaw), sy = sin(yaw), cp = cos(pitch), sp = sin(pitch)
+        func onMask(_ dot: CGPoint) -> CGPoint {
+            guard tethered else { return dot }
+            let u = dot.x / 17, v = (dot.y - 20) / 16
+            let z = sqrt(max(0, 1 - u*u - v*v))
+            return p(17 * (u*cy + z*sy), 20 + 16 * (v*cp + (z*cy - u*sy)*sp))
+        }
         let hub = p(climbing ? 0 : 1, climbing ? 21 : 16)
         for outer in [p(-10,3),p(0,1),p(11,4),p(-19,16),p(19,16),p(-19,27),p(19,27),p(-11,37),p(0,37),p(11,37)] {
-            stroke([hub,outer], silk, 0.66)
+            stroke((0...6).map { i in let t = CGFloat(i)/6; return onMask(p(hub.x+(outer.x-hub.x)*t,hub.y+(outer.y-hub.y)*t)) }, silk, 0.66)
         }
         for y: CGFloat in [10, 17, 24, 30] {
-            let curve = CGMutablePath(); curve.move(to: p(-18,y + 2))
+            let curve = CGMutablePath(); curve.move(to: onMask(p(-18,y + 2)))
             for j in 0..<4 {
                 let x = CGFloat(j) * 9 - 18
-                curve.addQuadCurve(to: p(x + 9,y + 2), control: p(x + 4.5,y - 1))
+                curve.addQuadCurve(to: onMask(p(x + 9,y + 2)), control: onMask(p(x + 4.5,y - 1)))
             }
             c.addPath(curve); c.setStrokeColor(silk); c.setLineWidth(0.65); c.strokePath()
         }
         if !climbing {
             for side: CGFloat in [-1,1] {
-                c.saveGState(); c.scaleBy(x: side, y: 1)
+                func eyePoint(_ x: CGFloat, _ y: CGFloat) -> CGPoint { onMask(p(side * x, y)) }
                 let eye = CGMutablePath()
-                eye.move(to: p(2.4,18.7)); eye.addQuadCurve(to: p(14.5,25), control: p(8,20))
-                eye.addQuadCurve(to: p(10.2,13.2), control: p(13.8,17))
-                eye.addQuadCurve(to: p(2.4,18.7), control: p(4,11)); eye.closeSubpath()
-                shape(eye, NSColor.rgb(0xF3FAFF).cgColor, 1.8)
+                eye.move(to: eyePoint(2.4,18.7)); eye.addQuadCurve(to: eyePoint(14.5,25), control: eyePoint(8,20))
+                eye.addQuadCurve(to: eyePoint(10.2,13.2), control: eyePoint(13.8,17))
+                eye.addQuadCurve(to: eyePoint(2.4,18.7), control: eyePoint(4,11)); eye.closeSubpath()
+                c.saveGState(); c.addPath(eye); c.clip()
+                c.drawLinearGradient(glass,start: eyePoint(6,22),end: eyePoint(10,13),options: [.drawsBeforeStartLocation,.drawsAfterEndLocation])
                 c.restoreGState()
+                c.addPath(eye); c.setStrokeColor(ink); c.setLineWidth(1.8); c.strokePath()
             }
         }
         c.restoreGState()
         c.addPath(head); c.setStrokeColor(ink); c.setLineWidth(1.8); c.strokePath()
         oval(leftHand.x - 2.8, leftHand.y - 2.7, 5.7, 5.5, red)
-        oval(rightHand.x - 2.8, rightHand.y - 2.7, 5.7, 5.5, red)
+        oval(rightHand.x - 2.8 - volume, rightHand.y - 2.7 - volume, 5.7 + 2 * volume, 5.5 + 2 * volume, red)
+        if tethered {
+            stroke([p(rightHand.x - 1.1,rightHand.y + 1.3),p(rightHand.x + 0.6,rightHand.y + 1.7)], NSColor.rgb(0xFFA58A).cgColor, 0.9)
+        }
     }
 }

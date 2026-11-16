@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screen = first
         setupCharacter()
         source.onFrame = { [weak self] field in
-            guard let self, !self.engine.paused, !self.menuOpen, !self.dragging else { return }
+            guard let self, !self.engine.paused, !self.menuOpen, !self.dragging || self.engine.webEnabled else { return }
             if self.captureAccess.state == .connecting {
                 self.captureAccess.receivedFrame()
                 self.captureLog.info("Desktop stream delivered its first frame.")
@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer.tolerance = 0.003; RunLoop.main.add(timer, forMode: .common); self.timer = timer
         NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(self, selector: #selector(motionPreferenceChanged), name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         settingsWasFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.systempreferences"
         center.addObserver(self, selector: #selector(frontAppChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         center.addObserver(self, selector: #selector(sleeping), name: NSWorkspace.screensDidSleepNotification, object: nil)
@@ -77,13 +78,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupCharacter() {
         let floor = screen.visibleFrame.minY - screen.frame.minY + 40
         engine = ClimbEngine(bounds: CGRect(origin: .zero, size: screen.frame.size), floor: floor, terrain: .handholds)
+        motionPreferenceChanged()
         panel = CharacterPanel(); character = CharacterView(engine: engine); panel.contentView = character
         applyAppearance()
         character.onMenu = { [weak self] event in self?.showMenu(event) }
         character.onPickUp = { [weak self] in self?.pickUp() }
         character.onDrag = { [weak self] point in self?.drag(to: point) }
         character.onDrop = { [weak self] in self?.drop() }
-        panel.place(at: engine.position, screenOrigin: screen.frame.origin)
+        panel.place(engine.projection, screenOrigin: screen.frame.origin)
+    }
+
+    @objc private func motionPreferenceChanged() {
+        engine.perspectiveEnabled = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     private func frame() {
@@ -91,21 +97,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastFrame = now
         let inside = panel.frame.insetBy(dx: 8, dy: 4).contains(NSEvent.mouseLocation)
         let response = pointerIntent.update(inside: inside, now: now, interacting: menuOpen || dragging)
-        hoverFrozen = response.freeze && engine.phase != .falling && engine.phase != .recovering
+        hoverFrozen = response.freeze && !engine.phase.inFreeFall && engine.phase != .recovering
         guard !menuOpen else { return }
         if response.disturb && engine.mouseEnabled && engine.phase.attached { engine.fall(.mouse) }
         if !engine.paused && !dragging {
-            if !hoverFrozen && (latestTerrain != nil || [.falling, .recovering].contains(engine.phase)) {
-                if now - lastWindows >= 0.1 {
-                    let windows = engine.phase.attached ? tracker.surfaces(on: screen) : []
+            if !hoverFrozen && (latestTerrain != nil || engine.phase.inFreeFall || engine.phase == .recovering) {
+                if now - lastWindows >= 0.1 || engine.phase == .webRescue {
+                    let windows = engine.phase.attached || engine.incomingWebSupport != nil ? tracker.surfaces(on: screen) : []
                     engine.validateWindowContacts(current: windows, captured: capturedWindows)
                     lastWindows = now
                 }
                 if now - lastGripProbe >= 0.1, let field = latestTerrain { _ = engine.updateGrip(field); lastGripProbe = now }
-                engine.step(dt, surfaces: holds, mouse: nil)
+                let previousPhase = engine.phase
+                engine.step(dt, surfaces: latestTerrain == nil ? [] : holds, mouse: nil)
+                if previousPhase != .webRescue && engine.phase == .webRescue {
+                    // Bind the target to the window in the frame that supplied the pixels.
+                    engine.validateWindowContacts(current: capturedWindows, captured: capturedWindows)
+                }
             }
         }
-        panel.place(at: engine.position, screenOrigin: screen.frame.origin)
+        panel.place(engine.projection, screenOrigin: screen.frame.origin)
         webPanel.update(engine, origin: screen.frame.origin, behind: panel)
         let status = engine.paused ? "已暂停" : desktopStatus
         if status != accessibleStatus { character.setAccessibilityValue(status); accessibleStatus = status }
@@ -131,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .webLaunch: return "正在弹射腾空"
         case .webRappel: return "正在倒挂探身"
         case .webKick: return "正在摆荡中剪式踢腿"
+        case .webRescue: return "正在坠落中射丝自救"
         case .falling: return "正在掉落"
         default: return engine.phase.attached ? "正在攀爬" : "正在寻找可抓的位置"
         }
@@ -139,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func acceptTerrain(_ field: PixelTerrain) {
         latestTerrain = field; lastGripProbe = ProcessInfo.processInfo.systemUptime
         let usable = field.holds.filter { $0.minY > engine.floor + 34 && $0.maxY < engine.bounds.maxY - 28 }
-        let retained = hoverFrozen ? engine.support : engine.updateGrip(field)
+        let retained = hoverFrozen && !engine.phase.inFreeFall ? engine.support : engine.updateGrip(field)
         holds = registry.update(usable)
         capturedWindows = tracker.surfaces(on: screen)
         if engine.webEnabled {
@@ -156,16 +168,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pickUp() {
         guard !menuOpen else { return }
-        dragging = true; suspendDesktop()
+        dragging = true
+        // Keep an already-running stream warm so release can use the pixels under the pointer immediately.
+        if !engine.webEnabled { suspendDesktop() }
+        engine.beginDrag()
         let mouse = NSEvent.mouseLocation
         dragOffset = CGPoint(x: mouse.x - screen.frame.minX - engine.position.x, y: mouse.y - screen.frame.minY - engine.position.y)
-        engine.beginDrag(); pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
+        pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
         character.needsDisplay = true
     }
     private func drag(to mouse: CGPoint) {
         guard dragging else { return }
         engine.drag(to: CGPoint(x: mouse.x - screen.frame.minX - dragOffset.x, y: mouse.y - screen.frame.minY - dragOffset.y))
-        panel.place(at: engine.position, screenOrigin: screen.frame.origin); character.needsDisplay = true
+        panel.place(engine.projection, screenOrigin: screen.frame.origin); character.needsDisplay = true
     }
     private func drop() {
         guard dragging else { return }
@@ -261,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showCaptureSettings() { settingsRequested = true }
 
     private func clearUnavailableTerrain() {
-        if engine.phase.attached { engine.fall(.erased) }
+        if engine.phase.attached || engine.phase == .webRescue { engine.fall(.erased) }
         latestTerrain = nil; holds = []; capturedWindows = []; registry.reset()
     }
 

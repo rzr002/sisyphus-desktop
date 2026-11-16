@@ -38,8 +38,8 @@ enum NativeChecks {
     }
 
     static func spiderPoses() -> [String: Bool] {
-        let tricks = ["webWindup", "webLaunch", "webRappel", "webKick"].compactMap(Phase.init(rawValue:))
-        var checks = ["fourTrickPosesAvailable": tricks.count == 4]
+        let tricks: [Phase] = [.webWindup, .webLaunch, .webRappel, .webKick, .webRescue]
+        var checks = projectedSwingChecks()
         var trickShapes: [Phase: Set<UInt64>] = [:]
         var completePoses = true, alignedWrists = true, silhouettes = Set<UInt64>()
         for phase in [Phase.climbing, .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault, .falling, .recovering] + tricks {
@@ -56,6 +56,7 @@ enum NativeChecks {
                     switch phase {
                     case .webWindup: wrists = [grip, aim]
                     case .webRappel, .webKick: wrists = [grip]
+                    case .webRescue: wrists = [aim]
                     case .webLaunch where progress >= 0.61: wrists = [aim]
                     default: wrists = []
                     }
@@ -65,31 +66,67 @@ enum NativeChecks {
                         let i = (y * bitmap.width + x) * 4
                         if Int(pixels[i]) - Int(pixels[i + 1]) < 65 || pixels[i + 3] < 200 { alignedWrists = false }
                     }
-                    var visible = 0, fingerprint: UInt64 = 0
+                    var visible = 0, fingerprint: UInt64 = 0, outside = 0
                     for y in 0..<160 {
                         for x in 0..<144 where pixels[(y * 144 + x) * 4 + 3] > 20 {
                             visible += 1; fingerprint = fingerprint &* 31 &+ UInt64(y * 144 + x)
-                            if !(24..<120).contains(x) || !(24..<136).contains(y) { completePoses = false }
+                            if !(24..<120).contains(x) || !(24..<136).contains(y) { outside += 1 }
                         }
                     }
                     if phase.usesWeb && side == 1 && wrist == -1 {
                         if tricks.contains(phase) { trickShapes[phase, default: []].insert(fingerprint) }
                         else { silhouettes.insert(fingerprint) }
                     }
-                    if visible < 650 { completePoses = false }
+                    if visible < 650 || outside > 0 {
+                        if completePoses { print("Pose bounds: \(phase) facing=\(side) wrist=\(wrist) progress=\(progress), visible=\(visible), clipped=\(outside)") }
+                        completePoses = false
+                    }
                 }
             } }
         }
         checks["spiderPosesVisibleAndUnclipped"] = completePoses
         checks["webActionsHaveDistinctSilhouettes"] = silhouettes.count == 9
-        checks["webEndpointsMeetPaintedGlovesThroughoutTricks"] = alignedWrists && tricks.count == 4
-        checks["newTricksChangeSilhouetteThroughTheMove"] = tricks.count == 4 && tricks.allSatisfy { (trickShapes[$0]?.count ?? 0) >= 3 }
-        checks["eachNewTrickHasAnOriginalSilhouette"] = tricks.count == 4 && tricks.allSatisfy { phase in
+        checks["webEndpointsMeetPaintedGlovesThroughoutTricks"] = alignedWrists
+        checks["newTricksChangeSilhouetteThroughTheMove"] = tricks.allSatisfy { (trickShapes[$0]?.count ?? 0) >= 3 }
+        checks["eachNewTrickHasAnOriginalSilhouette"] = tricks.allSatisfy { phase in
             var others = silhouettes
             for (other, shapes) in trickShapes where other != phase { others.formUnion(shapes) }
             return !(trickShapes[phase] ?? []).subtracting(others).isEmpty
         }
         return checks
+    }
+
+    private static func projectedSwingChecks() -> [String: Bool] {
+        let hero = ClimbEngine(bounds: CGRect(x: 0, y: 0, width: 1200, height: 900), floor: 40, terrain: .handholds)
+        hero.webEnabled = true
+        let ledge = Surface(id: 1, frame: CGRect(x: 710, y: 350, width: 100, height: 10))
+        var nearScale: CGFloat = 0, farScale: CGFloat = 2, nearArea = 0, farArea = 0, aligned = true, unclipped = true
+        for frame in 0..<800 {
+            hero.step(1 / 60, surfaces: [ledge], mouse: nil)
+            guard frame % 3 == 0, hero.phase == .webSwinging, let hand = hero.displayStrands.first?.hand else { continue }
+            let view = hero.projection
+            guard view.scale > nearScale || view.scale < farScale else { continue }
+            let w = Int(ceil(CharacterPanel.canvas.width * view.scale)) + 16
+            let h = Int(ceil(CharacterPanel.canvas.height * view.scale)) + 16
+            let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            c.translateBy(x: 8, y: 8); SpiderRenderer.body(hero, in: c)
+            let pixels = c.data!.assumingMemoryBound(to: UInt8.self)
+            var area = 0
+            for y in 0..<h { for x in 0..<w where pixels[(y * w + x) * 4 + 3] > 90 {
+                area += 1
+                if x < 8 || x >= w - 8 || y < 8 || y >= h - 8 { unclipped = false }
+            } }
+            let x = Int(8 + CharacterPanel.pivot.x * view.scale + hand.x - view.body.x)
+            let y = h - 1 - Int(8 + CharacterPanel.pivot.y * view.scale + hand.y - view.body.y)
+            let i = 4 * (y * w + x)
+            if pixels[i + 3] < 180 || Int(pixels[i]) - Int(pixels[i + 1]) < 45 { aligned = false }
+            if view.scale > nearScale { nearScale = view.scale; nearArea = area }
+            if view.scale < farScale { farScale = view.scale; farArea = area }
+        }
+        return ["nearPassPaintsTwiceTheFarSilhouetteArea": farArea > 0 && nearArea > 2 * farArea,
+                "projectedSilkHitsThePaintedGlove": farArea > 0 && aligned,
+                "projectedArtworkFitsItsInputWindow": farArea > 0 && unclipped]
     }
 
     static func run() {

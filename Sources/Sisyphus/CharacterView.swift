@@ -1,8 +1,8 @@
 import AppKit
 import ClimbCore
 
-/// Only this 96 × 112 pt sprite-sized window receives input. The desktop around
-/// it remains untouched; no full-screen mouse monitor or Accessibility grant.
+/// Only the sprite-sized window receives input. Its canvas follows the apparent
+/// size of the swinging character; the rest of the desktop remains clickable.
 final class CharacterPanel: NSPanel {
     static let canvas = CGSize(width: 96, height: 112)
     static let pivot = CGPoint(x: 48, y: 44)
@@ -17,9 +17,12 @@ final class CharacterPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false; animationBehavior = .none
     }
-    func place(at point: CGPoint, screenOrigin: CGPoint) {
-        setFrameOrigin(CGPoint(x: screenOrigin.x + point.x - Self.pivot.x,
-                               y: screenOrigin.y + point.y - Self.pivot.y))
+    func place(_ view: SpiderProjection, screenOrigin: CGPoint) {
+        let origin = CGPoint(x: screenOrigin.x + view.body.x - Self.pivot.x * view.scale,
+                             y: screenOrigin.y + view.body.y - Self.pivot.y * view.scale)
+        let size = CGSize(width: Self.canvas.width * view.scale, height: Self.canvas.height * view.scale)
+        if frame.size != size { setFrame(CGRect(origin: origin, size: size), display: false) }
+        else if frame.origin != origin { setFrameOrigin(origin) }
     }
 }
 
@@ -56,11 +59,12 @@ final class CharacterView: NSView {
             c.setFillColor(NSColor.black.withAlphaComponent(0.13).cgColor)
             c.fillEllipse(in: CGRect(x: 26, y: 5, width: 44, height: 6))
         }
-        c.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: NSColor.black.withAlphaComponent(0.2).cgColor)
         if engine.webEnabled {
-            SpiderArt.draw(in: c, phase: engine.phase, time: engine.elapsed, facing: engine.facing, angle: engine.swingAngle,
-                          wristSide: engine.wristSide, grip: engine.gripOffset, aim: engine.throwOffset, progress: engine.poseProgress)
-        } else if let spritePack {
+            SpiderRenderer.body(engine, in: c)
+            return
+        }
+        c.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: NSColor.black.withAlphaComponent(0.2).cgColor)
+        if let spritePack {
             // Reaching and traversing are one continuous climb cycle; changing
             // handholds must not reset it to the same leading arm every time.
             let moving = [Phase.searching, .walking, .climbing, .reaching, .traversing].contains(engine.phase)
