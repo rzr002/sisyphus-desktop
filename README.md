@@ -4,7 +4,7 @@
 
 Sisyphus 是一个原生 macOS 桌宠游戏。新条茜会背对着你，抓住笔画往上爬。换成蜘蛛侠，看他左手挂住文档，右手朝另一扇窗口吐丝，双腿一收，把自己弹过中间的空档。桌面上只有角色，摔到底就重新出发。
 
-**[下载 Mac 版 · v0.5.0](https://github.com/rzr002/sisyphus-desktop/releases/download/v0.5.0/Sisyphus-0.5.0-macOS-arm64.zip)**
+**[下载 Mac 版 · v0.5.1](https://github.com/rzr002/sisyphus-desktop/releases/download/v0.5.1/Sisyphus-0.5.1-macOS-arm64.zip)**
 
 Apple Silicon（M 系列），macOS 14 或更高版本。游戏在主显示器上运行。
 
@@ -15,7 +15,7 @@ Apple Silicon（M 系列），macOS 14 或更高版本。游戏在主显示器�
 ## 在你的文档里试一次
 
 1. 解压下载的 ZIP，把 **Sisyphus.app** 拖进「应用程序」并打开。这个预览版使用临时签名，尚未经过 Apple 公证。首次启动被系统拦下时，可查看 [Apple 的打开说明](https://support.apple.com/zh-cn/102445)。
-2. 在「系统设置 → 隐私与安全性 → 录屏与系统录音」中允许 **Sisyphus**，按系统提示重新打开。桌宠用这项权限读取可见像素。它只在本机分析画面，不录音、不保存画面、不上传。 [Apple 权限说明](https://support.apple.com/zh-cn/guide/mac-help/mchld6aa7d23/mac)
+2. 首次使用，右键小人选 **允许读取桌面…**，按 macOS 提示在「录屏与系统录音」中允许 Sisyphus。下次打开同一版本会使用已有授权。拒绝后小人会等你主动启用。画面只在本机分析，不录音、不保存、不上传。[Apple 权限说明](https://support.apple.com/zh-cn/guide/mac-help/mchld6aa7d23/mac)
 3. 打开「文本编辑」，把窗口放到靠近桌面底部的位置，在靠近屏幕底部的地方打几行字。等她抓上去，再删掉手边的那行字。
 4. 右键角色，选 **外观 → 蜘蛛侠**。把两扇窗口并排放，中间露出一条壁纸。等他荡进两个高支点之间，两根蛛丝会拉成 V 字。他屈膝后拉，两线一起松开，腾空后再伸手接丝。试着在蓄力时删掉一端的字，他会用剩下的那根丝接住自己。
 
@@ -41,7 +41,7 @@ Swift、AppKit 和 ScreenCaptureKit 在主显示器上比较相邻像素的颜�
 <details>
 <summary>人物一直待在地面</summary>
 
-右键看看菜单。出现「桌面读取尚未生效」时，请检查 Sisyphus 的录屏权限，按系统提示重启，或选择「重新连接桌面」。如果刚换过临时签名版本，系统可能仍记着上一版。可移除权限列表中原有的 Sisyphus 条目，重新添加「应用程序」里的这一份。
+右键小人可以打开录屏权限设置。若你主动停止过共享，可以选择「重新连接桌面」。如果刚升级后开关已经打开但仍不能读取，临时签名可能只对应旧版。此时只需移除列表里的 Sisyphus，重新添加「应用程序」里的这一份，并按系统提示重新打开。发布者可以在历次打包时设置同一团队的 `CODESIGN_IDENTITY`（Developer ID Application），让 macOS 识别后续升级。[Apple 对签名身份的说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 
 如果桌面读取正常，把一行对比明显的文字移到屏幕底部附近。普通角色要先从地面够到第一处支点；蜘蛛侠也需要射程内有真实边缘。
 </details>

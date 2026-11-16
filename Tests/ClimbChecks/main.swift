@@ -337,6 +337,7 @@ check("Picking the character up detaches it without counting a fall") {
     try expect(e.phase == .dragging && e.support == nil && e.falls == 0, "Dragging should deliberately release support")
 }
 checkWebTricks()
+checkDesktopCaptureAccess()
 check("Dragging follows the pointer and stays inside the display") {
     let e = textClimber(); e.beginDrag(); e.drag(to: CGPoint(x: 700, y: 400))
     try expect(e.position == CGPoint(x: 700, y: 400), "Must follow the requested drag position")

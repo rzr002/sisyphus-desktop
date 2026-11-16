@@ -1,6 +1,7 @@
 import AppKit
 import ClimbCore
 import UniformTypeIdentifiers
+import os
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screen: NSScreen!
@@ -11,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private let tracker = WindowTracker()
     private let source = ScreenTerrainSource()
+    private let captureAccess = DesktopCaptureAccess()
+    private let captureLog = Logger(subsystem: "studio.leosnow.sisyphus", category: "DesktopCapture")
     private let registry = HoldRegistry()
     private let appearances = AppearanceLibrary()
     private var holds: [Surface] = []
@@ -18,12 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var latestTerrain: PixelTerrain?
     private var lastGripProbe: TimeInterval = 0
     private var lastFrame: TimeInterval = 0
-    private var lastScan: TimeInterval = 0
     private var lastWindows: TimeInterval = 0
-    private var permission = false
-    private var receivedDesktopFrame = false
-    private var captureFailed = false
-    private var reconnectRequested = false
+    private var enableRequested = false
+    private var settingsRequested = false
+    private var settingsWasFrontmost = false
+    private var checkAfterSettings = false
     private var importRequested = false
     private var accessibleStatus = ""
     private var menuOpen = false
@@ -39,22 +41,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupCharacter()
         source.onFrame = { [weak self] field in
             guard let self, !self.engine.paused, !self.menuOpen, !self.dragging else { return }
-            // A successfully delivered frame is authoritative. Core Graphics'
-            // preflight result can remain stale after the user grants access.
-            self.permission = true; self.receivedDesktopFrame = true; self.captureFailed = false
+            if self.captureAccess.state == .connecting {
+                self.captureAccess.receivedFrame()
+                self.captureLog.info("Desktop stream delivered its first frame.")
+            }
             self.acceptTerrain(field)
         }
         source.onFailure = { [weak self] _ in
             guard let self else { return }
-            if self.engine.phase.usesWeb { self.engine.fall(.erased) }
-            self.holds = []; self.latestTerrain = nil; self.receivedDesktopFrame = false; self.captureFailed = true
-            self.permission = CGPreflightScreenCaptureAccess()
+            self.captureAccess.failed()
+            self.clearUnavailableTerrain()
         }
-        permission = CGPreflightScreenCaptureAccess()
+        source.onUnavailable = { [weak self] in self?.clearUnavailableTerrain() }
         panel.orderFrontRegardless()
-        // Try ScreenCaptureKit itself once, even if the cached preflight says no.
-        // macOS presents its own consent prompt when access really is absent.
-        reconnectDesktop()
+        resumeDesktop()
+        if captureAccess.state == .needsPermission || captureAccess.state == .needsReconnect {
+            captureLog.info("Desktop capture is idle, waiting for user action.")
+        }
         // Standard app quit shortcut, without a status item, Dock icon or settings window.
         let main = NSMenu(), root = NSMenuItem(title: "Sisyphus", action: nil, keyEquivalent: "")
         let appMenu = NSMenu(title: "Sisyphus")
@@ -65,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer.tolerance = 0.003; RunLoop.main.add(timer, forMode: .common); self.timer = timer
         NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let center = NSWorkspace.shared.notificationCenter
+        settingsWasFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.systempreferences"
+        center.addObserver(self, selector: #selector(frontAppChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         center.addObserver(self, selector: #selector(sleeping), name: NSWorkspace.screensDidSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(waking), name: NSWorkspace.screensDidWakeNotification, object: nil)
     }
@@ -90,11 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !menuOpen else { return }
         if response.disturb && engine.mouseEnabled && engine.phase.attached { engine.fall(.mouse) }
         if !engine.paused && !dragging {
-            if now - lastScan >= 3 {
-                if !source.isRunning && (permission || CGPreflightScreenCaptureAccess()) { source.start(on: screen) }
-                lastScan = now
-            }
-            if !hoverFrozen && (receivedDesktopFrame || [.falling, .recovering].contains(engine.phase)) {
+            if !hoverFrozen && (latestTerrain != nil || [.falling, .recovering].contains(engine.phase)) {
                 if now - lastWindows >= 0.1 {
                     let windows = engine.phase.attached ? tracker.surfaces(on: screen) : []
                     engine.validateWindowContacts(current: windows, captured: capturedWindows)
@@ -106,10 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.place(at: engine.position, screenOrigin: screen.frame.origin)
         webPanel.update(engine, origin: screen.frame.origin, behind: panel)
-        let status = engine.paused ? "已暂停" : (captureFailed ? "桌面读取未就绪，请右键重新连接桌面" :
-            (!receivedDesktopFrame ? "正在连接桌面" : movementDescription))
+        let status = engine.paused ? "已暂停" : desktopStatus
         if status != accessibleStatus { character.setAccessibilityValue(status); accessibleStatus = status }
         if !engine.paused && !hoverFrozen || dragging { character.needsDisplay = true }
+    }
+
+    private var desktopStatus: String {
+        switch captureAccess.state {
+        case .needsPermission: return "等待桌面读取授权，请右键角色"
+        case .needsReconnect: return "桌面读取已停止，请右键重新连接"
+        default: return latestTerrain == nil ? "正在等待桌面画面" : movementDescription
+        }
     }
 
     private var movementDescription: String {
@@ -148,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pickUp() {
         guard !menuOpen else { return }
-        dragging = true; source.stop()
+        dragging = true; suspendDesktop()
         let mouse = NSEvent.mouseLocation
         dragOffset = CGPoint(x: mouse.x - screen.frame.minX - engine.position.x, y: mouse.y - screen.frame.minY - engine.position.y)
         engine.beginDrag(); pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
@@ -162,22 +170,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func drop() {
         guard dragging else { return }
         dragging = false; engine.endDrag(); pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
-        lastScan = 0; latestTerrain = nil; character.needsDisplay = true
+        resumeDesktop(); character.needsDisplay = true
     }
 
     private func showMenu(_ event: NSEvent?) {
         guard !dragging && !menuOpen else { return }
-        menuOpen = true; source.stop()
+        menuOpen = true; suspendDesktop()
         let menu = NSMenu()
         func item(_ title: String, _ action: Selector, into targetMenu: NSMenu? = nil) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self
             (targetMenu ?? menu).addItem(item); return item
         }
-        if !receivedDesktopFrame {
-            let status = NSMenuItem(title: "桌面读取尚未生效", action: nil, keyEquivalent: "")
-            status.isEnabled = false; menu.addItem(status)
-            _ = item("重新连接桌面", #selector(reconnectDesktop))
-            _ = item("屏幕录制权限…", #selector(requestPermission)); menu.addItem(.separator())
+        if captureAccess.state == .needsPermission || captureAccess.state == .needsReconnect {
+            if captureAccess.state == .needsReconnect {
+                _ = item("重新连接桌面", #selector(enableDesktop))
+                _ = item("打开录屏权限设置…", #selector(showCaptureSettings))
+            } else if captureAccess.hasRequestedPermission {
+                _ = item("打开录屏权限设置…", #selector(showCaptureSettings))
+            } else {
+                _ = item("允许读取桌面…", #selector(enableDesktop))
+            }
+            menu.addItem(.separator())
         }
         _ = item(engine.paused ? "继续攀爬" : "暂停", #selector(togglePause))
         _ = item("重新出发", #selector(restart))
@@ -203,9 +216,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let event { NSMenu.popUpContextMenu(menu, with: event, for: character) }
         else { menu.popUp(positioning: nil, at: CGPoint(x: 60, y: 62), in: character) }
         menuOpen = false; pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
-        lastFrame = ProcessInfo.processInfo.systemUptime; lastScan = 0; latestTerrain = nil
+        lastFrame = ProcessInfo.processInfo.systemUptime
         if importRequested { importRequested = false; importCharacter() }
-        if reconnectRequested { reconnectRequested = false; reconnectDesktop() }
+        if settingsRequested {
+            settingsRequested = false; performCaptureAction(.openSettings)
+        } else if enableRequested {
+            enableRequested = false
+            if engine.paused { performCaptureAction(.openSettings) }
+            else { performCaptureAction(captureAccess.enable(check: CGPreflightScreenCaptureAccess)) }
+        } else { resumeDesktop() }
     }
     private func applyAppearance() {
         engine.webEnabled = appearances.selectedID == AppearanceLibrary.spiderID
@@ -218,10 +237,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func requestImport() { importRequested = true }
     private func importCharacter() {
-        menuOpen = true; source.stop()
+        menuOpen = true; suspendDesktop()
         defer {
             menuOpen = false; pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
-            lastFrame = ProcessInfo.processInfo.systemUptime; lastScan = 0; latestTerrain = nil
+            lastFrame = ProcessInfo.processInfo.systemUptime
         }
         let picker = NSOpenPanel()
         picker.title = "导入角色"
@@ -238,31 +257,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.runModal()
         }
     }
-    @objc private func reconnectDesktop() {
-        guard !menuOpen else { reconnectRequested = true; return }
-        if engine.phase.usesWeb { engine.fall(.erased) }
-        source.stop(); holds = []; latestTerrain = nil; receivedDesktopFrame = false; captureFailed = false
-        lastScan = ProcessInfo.processInfo.systemUptime
-        source.start(on: screen)
+    @objc private func enableDesktop() { enableRequested = true }
+    @objc private func showCaptureSettings() { settingsRequested = true }
+
+    private func clearUnavailableTerrain() {
+        if engine.phase.attached { engine.fall(.erased) }
+        latestTerrain = nil; holds = []; capturedWindows = []; registry.reset()
     }
-    @objc private func requestPermission() {
-        if CGPreflightScreenCaptureAccess() { permission = true; return }
-        permission = CGRequestScreenCaptureAccess()
-        if !permission, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
+
+    private func suspendDesktop() {
+        captureAccess.suspend()
+        source.stop()
+        latestTerrain = nil
     }
-    @objc private func togglePause() { engine.paused.toggle(); if engine.paused { source.stop() }; lastScan = 0 }
-    @objc private func restart() { engine.restart(); lastScan = 0 }
+
+    private func resumeDesktop() {
+        guard !engine.paused, !dragging, !menuOpen else { return }
+        if checkAfterSettings {
+            checkAfterSettings = false
+            if captureAccess.state == .needsPermission {
+                performCaptureAction(captureAccess.receivedPermission(CGPreflightScreenCaptureAccess()))
+                return
+            }
+        }
+        performCaptureAction(captureAccess.resume(check: CGPreflightScreenCaptureAccess))
+    }
+
+    private func performCaptureAction(_ action: DesktopCaptureAccess.Action) {
+        switch action {
+        case .none: break
+        case .start:
+            captureLog.info("Starting desktop stream.")
+            source.start(on: screen)
+        case .requestPermission:
+            // A negative result may already have put up the system's own dialog.
+            // Opening Settings here as well would send the user through setup twice.
+            captureAccess.awaitSettings()
+            let allowed = CGRequestScreenCaptureAccess()
+            if !engine.paused && !dragging && !menuOpen { performCaptureAction(captureAccess.receivedPermission(allowed)) }
+            else { checkAfterSettings = true }
+        case .openSettings:
+            captureAccess.awaitSettings()
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    @objc private func frontAppChanged(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        let inSettings = app.bundleIdentifier == "com.apple.systempreferences"
+        let returned = settingsWasFrontmost && !inSettings
+        settingsWasFrontmost = inSettings
+        if returned && captureAccess.state == .needsPermission { checkAfterSettings = true; resumeDesktop() }
+    }
+
+    @objc private func togglePause() { engine.paused.toggle(); if engine.paused { suspendDesktop() } else { resumeDesktop() } }
+    @objc private func restart() { engine.restart() }
     @objc private func toggleMouse() { engine.mouseEnabled.toggle() }
     @objc private func changeSpeed(_ sender: NSMenuItem) { if let value = sender.representedObject as? Double { engine.speed = value } }
     @objc private func quit() { NSApp.terminate(nil) }
-    @objc private func sleeping() { priorPaused = engine.paused; engine.paused = true; source.stop() }
-    @objc private func waking() { engine.paused = priorPaused; lastFrame = ProcessInfo.processInfo.systemUptime; lastScan = 0 }
+    @objc private func sleeping() { priorPaused = engine.paused; engine.paused = true; suspendDesktop() }
+    @objc private func waking() { engine.paused = priorPaused; lastFrame = ProcessInfo.processInfo.systemUptime; resumeDesktop() }
     @objc private func screenChanged() {
         guard let next = NSScreen.screens.first, screen.frame != next.frame || screen.visibleFrame != next.visibleFrame else { return }
-        source.stop(); panel.close(); screen = next
+        suspendDesktop(); panel.close(); screen = next
         holds = []; latestTerrain = nil; registry.reset(); capturedWindows = []; webPanel.orderOut(nil)
-        setupCharacter(); panel.orderFrontRegardless(); lastScan = 0
+        let paused = engine.paused
+        setupCharacter(); engine.paused = paused; panel.orderFrontRegardless(); resumeDesktop()
     }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { panel.orderFrontRegardless(); return false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        panel.orderFrontRegardless()
+        if captureAccess.state == .needsPermission { checkAfterSettings = true; resumeDesktop() }
+        return false
+    }
     func applicationWillTerminate(_ notification: Notification) { timer?.invalidate(); source.stop(); webPanel.orderOut(nil); panel?.orderOut(nil) }
 }

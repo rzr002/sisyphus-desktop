@@ -64,6 +64,7 @@ private final class TerrainStreamOutput: NSObject, SCStreamOutput {
 final class ScreenTerrainSource: NSObject, SCStreamDelegate {
     var onFrame: ((PixelTerrain) -> Void)?
     var onFailure: ((Error) -> Void)?
+    var onUnavailable: (() -> Void)?
     private let logger = Logger(subsystem: "studio.leosnow.sisyphus", category: "DesktopCapture")
     private(set) var isRunning = false
     private var stream: SCStream?
@@ -93,7 +94,7 @@ final class ScreenTerrainSource: NSObject, SCStreamDelegate {
                     self.onFrame?(field)
                 }, onUnavailable: { [weak self] in
                     guard let self, self.version == token, self.isRunning else { return }
-                    self.onFailure?(NSError(domain: "Sisyphus", code: 2, userInfo: [NSLocalizedDescriptionKey: "桌面画面暂时不可用。 "]))
+                    self.onUnavailable?()
                 })
                 let stream = SCStream(filter: filter, configuration: config, delegate: self)
                 self.output = output; self.stream = stream
@@ -109,7 +110,7 @@ final class ScreenTerrainSource: NSObject, SCStreamDelegate {
         }
     }
     private func failed(_ error: Error) {
-        isRunning = false
+        stop()
         logger.error("Desktop capture failed: \(error.localizedDescription, privacy: .public)")
         onFailure?(error)
     }
