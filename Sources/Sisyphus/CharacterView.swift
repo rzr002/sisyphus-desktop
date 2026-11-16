@@ -59,7 +59,7 @@ final class CharacterView: NSView {
         c.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: NSColor.black.withAlphaComponent(0.2).cgColor)
         if engine.webEnabled {
             SpiderArt.draw(in: c, phase: engine.phase, time: engine.elapsed, facing: engine.facing, angle: engine.swingAngle,
-                          wristSide: engine.wristSide, grip: engine.gripOffset, aim: engine.throwOffset, flip: engine.flipProgress)
+                          wristSide: engine.wristSide, grip: engine.gripOffset, aim: engine.throwOffset, progress: engine.poseProgress)
         } else if let spritePack {
             // Reaching and traversing are one continuous climb cycle; changing
             // handholds must not reset it to the same leading arm every time.

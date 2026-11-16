@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearances = AppearanceLibrary()
     private var holds: [Surface] = []
     private var capturedWindows: [Surface] = []
-    private var attachment: (hold: UInt32, window: UInt32, frame: CGRect)?
     private var latestTerrain: PixelTerrain?
     private var lastGripProbe: TimeInterval = 0
     private var lastFrame: TimeInterval = 0
@@ -96,7 +95,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastScan = now
             }
             if !hoverFrozen && (receivedDesktopFrame || [.falling, .recovering].contains(engine.phase)) {
-                if now - lastWindows >= 0.1 { validateParentWindow(); lastWindows = now }
+                if now - lastWindows >= 0.1 {
+                    let windows = engine.phase.attached ? tracker.surfaces(on: screen) : []
+                    engine.validateWindowContacts(current: windows, captured: capturedWindows)
+                    lastWindows = now
+                }
                 if now - lastGripProbe >= 0.1, let field = latestTerrain { _ = engine.updateGrip(field); lastGripProbe = now }
                 engine.step(dt, surfaces: holds, mouse: nil)
             }
@@ -116,6 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .webSwinging: return "正在荡蛛丝"
         case .webHandoff: return "正在交替换丝"
         case .webVault: return "正在翻身接丝"
+        case .webWindup: return "正在拉紧两根蛛丝"
+        case .webLaunch: return "正在弹射腾空"
+        case .webRappel: return "正在倒挂探身"
+        case .webKick: return "正在摆荡中剪式踢腿"
         case .falling: return "正在掉落"
         default: return engine.phase.attached ? "正在攀爬" : "正在寻找可抓的位置"
         }
@@ -133,23 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 holds[index].windowID = capturedWindows.first { $0.frame.contains(CGPoint(x: r.midX, y: r.midY)) }?.id
             }
         }
-        if let retained { holds.removeAll { $0.id == retained.id }; holds.append(retained) }
-    }
-
-    private func validateParentWindow() {
-        guard let support = engine.support, engine.phase.attached else { attachment = nil; return }
-        let contact = engine.webAnchor ?? CGPoint(x: support.frame.midX, y: support.frame.midY)
-        if attachment?.hold != support.id {
-            attachment = capturedWindows.first(where: { $0.frame.contains(contact) }).map { (support.id, $0.id, $0.frame) }
-        }
-        guard let attached = attachment, attached.hold == support.id else { return }
-        let current = tracker.surfaces(on: screen)
-        guard let after = current.first(where: { $0.id == attached.window })?.frame else { engine.fall(.closed); return }
-        let before = attached.frame
-        if max(abs(before.minX - after.minX), abs(before.minY - after.minY), abs(before.width - after.width), abs(before.height - after.height)) > 2 { engine.fall(.moved); return }
-        for window in current {
-            if window.id == attached.window { break }
-            if window.frame.contains(contact) { engine.fall(.covered); break }
+        for grip in [retained, engine.incomingWebSupport].compactMap({ $0 }) {
+            holds.removeAll { $0.id == grip.id }
+            holds.append(grip)
         }
     }
 
@@ -158,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dragging = true; source.stop()
         let mouse = NSEvent.mouseLocation
         dragOffset = CGPoint(x: mouse.x - screen.frame.minX - engine.position.x, y: mouse.y - screen.frame.minY - engine.position.y)
-        engine.beginDrag(); attachment = nil; pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
+        engine.beginDrag(); pointerIntent.protect(after: ProcessInfo.processInfo.systemUptime)
         character.needsDisplay = true
     }
     private func drag(to mouse: CGPoint) {
@@ -258,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !permission, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
     }
     @objc private func togglePause() { engine.paused.toggle(); if engine.paused { source.stop() }; lastScan = 0 }
-    @objc private func restart() { engine.restart(); attachment = nil; lastScan = 0 }
+    @objc private func restart() { engine.restart(); lastScan = 0 }
     @objc private func toggleMouse() { engine.mouseEnabled.toggle() }
     @objc private func changeSpeed(_ sender: NSMenuItem) { if let value = sender.representedObject as? Double { engine.speed = value } }
     @objc private func quit() { NSApp.terminate(nil) }
@@ -267,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func screenChanged() {
         guard let next = NSScreen.screens.first, screen.frame != next.frame || screen.visibleFrame != next.visibleFrame else { return }
         source.stop(); panel.close(); screen = next
-        holds = []; latestTerrain = nil; registry.reset(); capturedWindows = []; webPanel.orderOut(nil); attachment = nil
+        holds = []; latestTerrain = nil; registry.reset(); capturedWindows = []; webPanel.orderOut(nil)
         setupCharacter(); panel.orderFrontRegardless(); lastScan = 0
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { panel.orderFrontRegardless(); return false }

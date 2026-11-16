@@ -12,7 +12,7 @@ enum SpiderArt {
     private static let silk = NSColor.rgb(0x843449).cgColor
 
     static func draw(in c: CGContext, phase: Phase, time: Double, facing: CGFloat, angle: CGFloat,
-                     wristSide: CGFloat, grip: CGPoint, aim: CGPoint, flip: CGFloat) {
+                     wristSide: CGFloat, grip: CGPoint, aim: CGPoint, progress: CGFloat) {
         let walking = phase == .searching || phase == .walking
         let climbing = [.climbing, .reaching, .traversing].contains(phase)
         let tethered = phase.usesWeb
@@ -21,12 +21,21 @@ enum SpiderArt {
         c.saveGState()
         defer { c.restoreGState() }
         c.translateBy(x: pivot.x, y: pivot.y)
-        if phase == .webVault {
-            let eased = flip * flip * (3 - 2 * flip)
+        let inversion = phase == .webRappel ? facing * .pi * progress : 0
+        let openForCatch = min(1, max(0, (progress - 0.26) / 0.33))
+        let kick = sin(.pi * progress)
+        if phase == .webRappel {
+            c.rotate(by: inversion)
+        } else if phase == .webLaunch {
+            // Unfold into a headfirst arrow, level off, then turn the shooting
+            // shoulder toward the next strand before it leaves the wrist.
+            c.rotate(by: -facing * (0.79 + 0.38 * sin(.pi * min(1, progress / 0.45))) * (1 - openForCatch))
+        } else if phase == .webVault {
+            let eased = progress * progress * (3 - 2 * progress)
             c.rotate(by: -facing * 2 * .pi * eased)
-        } else if phase == .webSwinging || phase == .webPulling {
+        } else if phase == .webSwinging || phase == .webPulling || phase == .webKick {
             // Pivot around the moving, load-bearing wrist: the ink touches the line even in a hard lean.
-            let lean = phase == .webPulling ? facing * 0.22 : max(-0.24, min(0.24, angle * 0.34))
+            let lean = phase == .webPulling ? facing * 0.22 : max(-0.24, min(0.24, angle * 0.34 - (phase == .webKick ? facing * kick * 0.18 : 0)))
             c.translateBy(x: grip.x, y: grip.y); c.rotate(by: lean); c.translateBy(x: -grip.x, y: -grip.y)
         } else if walking {
             c.translateBy(x: 0, y: -5 + 1.5 * abs(wave))
@@ -55,14 +64,43 @@ enum SpiderArt {
         let leftFoot: CGPoint, rightFoot: CGPoint
         var leftElbow = p(-14, 0), rightElbow = p(14, 0)
         if tethered {
-            let active = p(grip.x * facing, grip.y)
+            // Inverse of the body rotation keeps a hanging wrist on the silk
+            // while the mask and torso turn upside down beneath it.
+            let active = p((grip.x * cos(inversion) + grip.y * sin(inversion)) * facing,
+                           -grip.x * sin(inversion) + grip.y * cos(inversion))
             let shooting = p(aim.x * facing, aim.y)
             let freeSide = -wristSide
             let loaded: CGPoint, free: CGPoint
             let tilt = sin(angle) * facing
             switch phase {
+            case .webWindup:
+                loaded = active; free = shooting
+                leftKnee = p(-14 - 8 * progress, -14 + 14 * progress)
+                rightKnee = p(14 + 8 * progress, -12 + 14 * progress)
+                leftFoot = p(-12 + 6 * progress, -28 + 17 * progress)
+                rightFoot = p(14 - 8 * progress, -23 + 14 * progress)
+            case .webLaunch:
+                loaded = p(-14 - 6 * openForCatch, -10 + 4 * openForCatch)
+                free = p(6 * (1 - openForCatch) + shooting.x * openForCatch, 39 * (1 - openForCatch) + shooting.y * openForCatch)
+                leftKnee = p(-8 - 7 * openForCatch, -20 + 8 * openForCatch)
+                rightKnee = p(10 + 8 * openForCatch, -17 + 11 * openForCatch)
+                leftFoot = p(-10 - 8 * openForCatch, -34 + 12 * openForCatch)
+                rightFoot = p(3 + 3 * openForCatch, -29 + 15 * openForCatch)
+            case .webRappel:
+                loaded = active
+                free = p(freeSide * (18 + 7 * progress), 2 + 17 * progress)
+                leftKnee = p(-16 - 2 * progress, -13 - 2 * progress)
+                rightKnee = p(16 + 2 * progress, -12 - 4 * progress)
+                leftFoot = p(-11 + 14 * progress, -24 - 8 * progress)
+                rightFoot = p(13 - 17 * progress, -22 - 8 * progress)
+            case .webKick:
+                loaded = active; free = p(-19 - 9 * kick, 1 + 14 * kick)
+                leftKnee = p(-12 - 9 * kick, -14 + 5 * kick)
+                rightKnee = p(12 + 8 * kick, -12 + 16 * kick)
+                leftFoot = p(-8 - 14 * kick, -26 + 6 * kick)
+                rightFoot = p(11 + 23 * kick, -23 + 32 * kick)
             case .webVault:
-                let open = max(0, min(1, (flip - 0.72) / 0.28))
+                let open = max(0, min(1, (progress - 0.72) / 0.28))
                 loaded = p(wristSide * (9 + 11 * open), -3 + 8 * open)
                 free = p(freeSide * 10 * (1-open) + shooting.x * open, -4 * (1-open) + shooting.y * open)
                 leftKnee = p(-13 - 4 * open, -3 - 9 * open); rightKnee = p(14, -1 - 10 * open)
@@ -84,10 +122,13 @@ enum SpiderArt {
                 leftKnee = p(-13 - 4 * tilt, -16 + 5 * tilt); rightKnee = p(15 + 3 * tilt, -9 - 4 * tilt)
                 leftFoot = p(-10 - 9 * tilt, -28 + 8 * tilt); rightFoot = p(8 + 6 * tilt, -19 - 5 * tilt)
             }
-            leftHand = wristSide < 0 ? loaded : free; rightHand = wristSide < 0 ? free : loaded
+            let loadOnLeft = phase == .webWindup ? loaded.x < free.x : wristSide < 0
+            leftHand = loadOnLeft ? loaded : free; rightHand = loadOnLeft ? free : loaded
             func elbow(_ hand: CGPoint, _ side: CGFloat) -> CGPoint {
                 // A bent, outward elbow clearly separates the two arms on a 96-point sprite.
-                p(0.55 * hand.x + side * (phase == .webVault && flip < 0.8 ? 5 : 11), 0.5 * hand.y + 2)
+                let bend: CGFloat = phase == .webVault && progress < 0.8 ? 5 : 11
+                let compression = phase == .webWindup ? 9 * progress : 0
+                return p(0.55 * hand.x + side * (bend + compression * 0.35), 0.5 * hand.y + 2 - compression)
             }
             leftElbow = elbow(leftHand, -1); rightElbow = elbow(rightHand, 1)
         } else if climbing {

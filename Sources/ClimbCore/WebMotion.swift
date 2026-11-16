@@ -9,6 +9,8 @@ struct WebMotion {
     static let handoffTime = 0.19
     static let flipTime = 0.38
     static let vaultTime = flipTime + handoffTime
+    static let kickTime = 0.58
+    static let rappelTime = 1.95
     let anchor: CGPoint
     let wristX: CGFloat
     var start: CGPoint
@@ -76,8 +78,17 @@ struct WebMotion {
         return catchLength == nil ? Self.blend(start, body, min(1, age / 0.8)) : body
     }
 
+    static func ease(_ fraction: CGFloat) -> CGFloat {
+        let t = min(1, max(0, fraction))
+        return t * t * (3 - 2 * t)
+    }
+
+    static func rappelExtension(at time: Double) -> CGFloat {
+        min(ease(time / 0.78), ease((rappelTime - time) / 0.71))
+    }
+
     static func blend(_ a: CGPoint, _ b: CGPoint, _ t: CGFloat) -> CGPoint {
-        let s = t * t * (3 - 2 * t)
+        let s = ease(t)
         return CGPoint(x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s)
     }
 }

@@ -29,7 +29,7 @@ import UniformTypeIdentifiers
         c.translateBy(x:hero.position.x-CharacterPanel.pivot.x,y:hero.position.y-CharacterPanel.pivot.y)
         c.setShadow(offset:CGSize(width:0,height:-1),blur:2,color:NSColor.black.withAlphaComponent(0.2).cgColor)
         SpiderArt.draw(in:c,phase:hero.phase,time:hero.elapsed,facing:hero.facing,angle:hero.swingAngle,
-                      wristSide:hero.wristSide,grip:hero.gripOffset,aim:hero.throwOffset,flip:hero.flipProgress)
+                      wristSide:hero.wristSide,grip:hero.gripOffset,aim:hero.throwOffset,progress:hero.poseProgress)
         return c.makeImage()!
     }
     static func main() throws {

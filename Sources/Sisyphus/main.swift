@@ -1,6 +1,13 @@
 import AppKit
 import ClimbCore
 
+#if DEBUG
+if CommandLine.arguments.contains("--verify-spider-poses") {
+    let checks = NativeChecks.spiderPoses()
+    for name in checks.keys.sorted() { print("\(checks[name] == true ? "PASS" : "FAIL")  \(name)") }
+    exit(checks.values.allSatisfy { $0 } ? 0 : 1)
+}
+#endif
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 #if DEBUG

@@ -276,7 +276,7 @@ check("Forward swings can chain three real anchors with alternating wrists and a
             if hero.flipProgress > 0.1 && hero.flipProgress < 0.9 && hero.strands.isEmpty { free = true }
             if free && hero.flipProgress == 1 && hero.strands.count == 1 { castAfterFlip = true }
         }
-        if [.webHandoff,.webVault].contains(before) && hero.phase == .webSwinging, let hold = hero.support, let anchor = hero.webAnchor {
+        if [.webHandoff, .webVault, .webLaunch].contains(before) && hero.phase == .webSwinging, let hold = hero.support, let anchor = hero.webAnchor {
             try expect(hold.frame.contains(anchor), "Each catch must land on the real destination")
             if let wrist { try expect(wrist != hero.wristSide, "Each catch switches leading wrist") }
             wrist = hero.wristSide; catches.append(hold.id)
@@ -336,6 +336,7 @@ check("Picking the character up detaches it without counting a fall") {
     let e = try attached(); e.beginDrag()
     try expect(e.phase == .dragging && e.support == nil && e.falls == 0, "Dragging should deliberately release support")
 }
+checkWebTricks()
 check("Dragging follows the pointer and stays inside the display") {
     let e = textClimber(); e.beginDrag(); e.drag(to: CGPoint(x: 700, y: 400))
     try expect(e.position == CGPoint(x: 700, y: 400), "Must follow the requested drag position")

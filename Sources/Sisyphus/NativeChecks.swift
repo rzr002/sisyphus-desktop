@@ -37,6 +37,61 @@ enum NativeChecks {
         print(String(data: data, encoding: .utf8)!); exit(0)
     }
 
+    static func spiderPoses() -> [String: Bool] {
+        let tricks = ["webWindup", "webLaunch", "webRappel", "webKick"].compactMap(Phase.init(rawValue:))
+        var checks = ["fourTrickPosesAvailable": tricks.count == 4]
+        var trickShapes: [Phase: Set<UInt64>] = [:]
+        var completePoses = true, alignedWrists = true, silhouettes = Set<UInt64>()
+        for phase in [Phase.climbing, .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault, .falling, .recovering] + tricks {
+            for side: CGFloat in [-1, 1] { for wrist: CGFloat in [-1, 1] {
+                for progress: CGFloat in (phase == .webVault || tricks.contains(phase) ? [0.0, 0.25, 0.5, 0.75, 1.0] : [0.0]) {
+                    let bitmap = CGContext(data: nil, width: 144, height: 160, bitsPerComponent: 8, bytesPerRow: 576,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                    bitmap.translateBy(x: 24, y: 24)
+                    let grip = CGPoint(x: wrist * side * 8, y: 37), aim = CGPoint(x: -wrist * side * 27, y: 23)
+                    SpiderArt.draw(in: bitmap, phase: phase, time: 0.6, facing: side, angle: side * 0.92,
+                                  wristSide: wrist, grip: grip, aim: aim, progress: progress)
+                    let pixels = bitmap.data!.assumingMemoryBound(to: UInt8.self)
+                    let wrists: [CGPoint]
+                    switch phase {
+                    case .webWindup: wrists = [grip, aim]
+                    case .webRappel, .webKick: wrists = [grip]
+                    case .webLaunch where progress >= 0.61: wrists = [aim]
+                    default: wrists = []
+                    }
+                    for point in wrists {
+                        let x = Int(24 + CharacterPanel.pivot.x + point.x)
+                        let y = bitmap.height - 1 - Int(24 + CharacterPanel.pivot.y + point.y)
+                        let i = (y * bitmap.width + x) * 4
+                        if Int(pixels[i]) - Int(pixels[i + 1]) < 65 || pixels[i + 3] < 200 { alignedWrists = false }
+                    }
+                    var visible = 0, fingerprint: UInt64 = 0
+                    for y in 0..<160 {
+                        for x in 0..<144 where pixels[(y * 144 + x) * 4 + 3] > 20 {
+                            visible += 1; fingerprint = fingerprint &* 31 &+ UInt64(y * 144 + x)
+                            if !(24..<120).contains(x) || !(24..<136).contains(y) { completePoses = false }
+                        }
+                    }
+                    if phase.usesWeb && side == 1 && wrist == -1 {
+                        if tricks.contains(phase) { trickShapes[phase, default: []].insert(fingerprint) }
+                        else { silhouettes.insert(fingerprint) }
+                    }
+                    if visible < 650 { completePoses = false }
+                }
+            } }
+        }
+        checks["spiderPosesVisibleAndUnclipped"] = completePoses
+        checks["webActionsHaveDistinctSilhouettes"] = silhouettes.count == 9
+        checks["webEndpointsMeetPaintedGlovesThroughoutTricks"] = alignedWrists && tricks.count == 4
+        checks["newTricksChangeSilhouetteThroughTheMove"] = tricks.count == 4 && tricks.allSatisfy { (trickShapes[$0]?.count ?? 0) >= 3 }
+        checks["eachNewTrickHasAnOriginalSilhouette"] = tricks.count == 4 && tricks.allSatisfy { phase in
+            var others = silhouettes
+            for (other, shapes) in trickShapes where other != phase { others.formUnion(shapes) }
+            return !(trickShapes[phase] ?? []).subtracting(others).isEmpty
+        }
+        return checks
+    }
+
     static func run() {
         guard let screen = NSScreen.screens.first else { print("{\"checks\":{\"displayAvailable\":false}}"); exit(1) }
         var checks: [String: Bool] = [:]
@@ -132,31 +187,7 @@ enum NativeChecks {
             AppearanceLibrary(defaults: defaults, directory: skinRoot).selectedID == AppearanceLibrary.spiderID
         let thread = WebPanel()
         checks["webPanelPassesClicksThrough"] = thread.ignoresMouseEvents && !thread.canBecomeKey && !thread.canBecomeMain
-        var completePoses = true, silhouettes = Set<UInt64>()
-        for phase: Phase in [.climbing, .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault, .falling, .recovering] {
-            for side: CGFloat in [-1, 1] { for wrist: CGFloat in [-1, 1] {
-                for flip: CGFloat in (phase == .webVault ? [0.0, 0.25, 0.5, 0.75, 1.0] : [0.0]) {
-                    let bitmap = CGContext(data: nil, width: 144, height: 160, bitsPerComponent: 8, bytesPerRow: 576,
-                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-                    bitmap.translateBy(x: 24, y: 24)
-                    SpiderArt.draw(in: bitmap, phase: phase, time: 0.6, facing: side, angle: side * 0.92,
-                                  wristSide: wrist, grip: CGPoint(x: wrist * side * 8, y: 37),
-                                  aim: CGPoint(x: -wrist * side * 27, y: 23), flip: flip)
-                    let pixels = bitmap.data!.assumingMemoryBound(to: UInt8.self)
-                    var visible = 0, fingerprint: UInt64 = 0
-                    for y in 0..<160 {
-                        for x in 0..<144 where pixels[(y * 144 + x) * 4 + 3] > 20 {
-                            visible += 1; fingerprint = fingerprint &* 31 &+ UInt64(y * 144 + x)
-                            if !(24..<120).contains(x) || !(24..<136).contains(y) { completePoses = false }
-                        }
-                    }
-                    if phase.usesWeb && side == 1 && wrist == -1 { silhouettes.insert(fingerprint) }
-                    if visible < 650 { completePoses = false }
-                }
-            } }
-        }
-        checks["spiderPosesVisibleAndUnclipped"] = completePoses
-        checks["webActionsHaveDistinctSilhouettes"] = silhouettes.count == 9
+        checks.merge(spiderPoses()) { _, new in new }
         let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent("sisyphus-check-" + UUID().uuidString)
         var first = SingleInstance(lockURL: lockURL)
         checks["secondDesktopCharacterIsRefused"] = first != nil && SingleInstance(lockURL: lockURL) == nil
