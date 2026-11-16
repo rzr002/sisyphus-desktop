@@ -5,6 +5,7 @@ public struct Surface: Equatable {
     public let id: UInt32
     public let name: String
     public var frame: CGRect
+    public var windowID: UInt32?
     public init(id: UInt32, name: String = "Window", frame: CGRect) {
         self.id = id; self.name = name; self.frame = frame
     }
@@ -12,9 +13,9 @@ public struct Surface: Equatable {
 
 public enum Phase: String {
     case waiting, searching, walking, jumping, climbing, reaching, traversing, summit, falling, recovering, dragging
-    case webCasting, webPulling, webSwinging
+    case webCasting, webPulling, webSwinging, webHandoff, webVault
 
-    public var usesWeb: Bool { self == .webCasting || self == .webPulling || self == .webSwinging }
+    public var usesWeb: Bool { [.webCasting, .webPulling, .webSwinging, .webHandoff, .webVault].contains(self) }
     public var attached: Bool { usesWeb || [.jumping, .climbing, .reaching, .traversing, .summit].contains(self) }
 }
 public enum Terrain { case windowEdges, handholds }
@@ -36,18 +37,42 @@ public final class ClimbEngine {
     public private(set) var phaseTime: Double = 0
     public private(set) var elapsed: Double = 0
     public var webEnabled = false {
-        didSet { if !webEnabled { if web != nil { fall(.manual) }; webField = nil } }
+        didSet { if !webEnabled { if phase.usesWeb { fall(.manual) }; webField = nil } }
     }
     public var webAnchor: CGPoint? { web?.anchor }
-    public var webHand: CGPoint { CGPoint(x: position.x, y: position.y + WebMotion.wristHeight) }
+    public private(set) var wristSide: CGFloat = -1
+    public var gripOffset: CGPoint { web?.wristOffset ?? CGPoint(x: wristSide * 8 * facing, y: WebMotion.wristHeight) }
+    public var webHand: CGPoint { CGPoint(x: position.x + gripOffset.x, y: position.y + gripOffset.y) }
+    public var throwOffset: CGPoint {
+        guard let next = swingTarget else { return .zero }
+        let dx = next.anchor.x - position.x, dy = next.anchor.y - position.y - 8
+        let distance = max(1, hypot(dx, dy))
+        return CGPoint(x: 32 * dx / distance, y: 8 + 28 * dy / distance)
+    }
+    public var flipProgress: CGFloat { phase == .webVault ? min(1, phaseTime / WebMotion.flipTime) : 0 }
+    public var strands: [WebStrand] {
+        var result: [WebStrand] = []
+        if let tip = webTip { result.append(WebStrand(hand: webHand, tip: tip, attached: phase != .webCasting)) }
+        if let target = swingTarget {
+            let time = phase == .webVault ? phaseTime - WebMotion.flipTime : phaseTime
+            if time > 0 {
+                let hand = CGPoint(x: position.x + throwOffset.x, y: position.y + throwOffset.y)
+                let tip = WebMotion.blend(hand, target.anchor, min(1, time / WebMotion.handoffTime))
+                result.append(WebStrand(hand: hand, tip: tip, attached: false))
+            }
+        }
+        return result
+    }
     public var webTip: CGPoint? {
         guard let web else { return nil }
         return phase == .webCasting ? WebMotion.blend(webHand, web.anchor, min(1, phaseTime / WebMotion.castTime)) : web.anchor
     }
-    public var swingAngle: CGFloat { phase == .webSwinging ? (web?.angle ?? 0) : 0 }
+    public var swingAngle: CGFloat { web?.angle ?? 0 }
     private var web: WebMotion?
+    private var swingTarget: SwingTarget?
+    private var transfers = 0
     private var webField: PixelTerrain?
-    private var nextSwingTime: Double = 4
+    private var nextSwingTime: Double = 2.2
     private var nextLateralWebTime: Double = 0
     private var lastWebSearch: Double = -1
     public var paused = false
@@ -75,7 +100,7 @@ public final class ClimbEngine {
     private var nextHold: Surface?
     private var gripStability = GripStability()
     public func beginDrag() {
-        web = nil; support = nil; nextHold = nil; velocity = .zero; gripStability.reset()
+        web = nil; swingTarget = nil; transfers = 0; support = nil; nextHold = nil; velocity = .zero; gripStability.reset()
         transition(.dragging)
     }
     public func drag(to point: CGPoint) {
@@ -93,6 +118,9 @@ public final class ClimbEngine {
     public func updateGrip(_ field: PixelTerrain) -> Surface? {
         if webEnabled {
             webField = field
+            if let target = swingTarget, !field.hasGrip(near: target.anchor, radius: 5) {
+                cancelTransfer(.erased)
+            }
             if let web, let support {
                 if gripStability.shouldRelease(hasGrip: field.hasGrip(near: web.anchor, radius: 5)) {
                     fall(.erased); return nil
@@ -121,6 +149,10 @@ public final class ClimbEngine {
         let dt = min(rawDT, 0.05) * max(0.25, min(2, speed))
         elapsed += dt; phaseTime += dt
 
+        if phase.attached, mouseEnabled, elapsed > armedTime, height > 28, let mouse,
+           hypot(mouse.x - position.x, mouse.y - (position.y + 4)) < 34 {
+            fall(.mouse); return
+        }
         if phase.attached, let anchor = support {
             guard let current = surfaces.first(where: { $0.id == anchor.id }) else { fall(.closed); return }
             let a = anchor.frame, b = current.frame
@@ -129,10 +161,6 @@ public final class ClimbEngine {
             }
             let hand = CGPoint(x: phase == .climbing ? gripX : position.x, y: min(b.maxY - 5, position.y + 16))
             if terrain == .windowEdges && phase != .jumping && !isExposed(hand, on: anchor, surfaces: surfaces) { fall(.covered); return }
-            if mouseEnabled, elapsed > armedTime, height > 28, let mouse,
-               hypot(mouse.x - position.x, mouse.y - (position.y + 4)) < 34 {
-                fall(.mouse); return
-            }
         }
 
         if terrain == .handholds {
@@ -142,7 +170,7 @@ public final class ClimbEngine {
         }
 
         switch phase {
-        case .searching, .reaching, .dragging, .webCasting, .webPulling, .webSwinging: break
+        case .searching, .reaching, .dragging, .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault: break
         case .waiting:
             if elapsed - lastSearch > 0.5 {
                 lastSearch = elapsed
@@ -210,8 +238,8 @@ public final class ClimbEngine {
     public func fall(_ reason: FallReason) {
         guard phase != .falling && phase != .recovering else { return }
         lastFall = reason; falls += 1
-        velocity = web?.speed ?? CGVector(dx: -facing * 105, dy: 105)
-        web = nil; nextHold = nil; gripStability.reset()
+        if phase != .webVault { velocity = web?.speed ?? CGVector(dx: -facing * 105, dy: 105) }
+        web = nil; swingTarget = nil; transfers = 0; nextHold = nil; gripStability.reset()
         nextSwingTime = elapsed + 3
         support = nil
         transition(.falling)
@@ -220,7 +248,7 @@ public final class ClimbEngine {
     public func restart() {
         attempt += 1; support = nil; nextHold = nil; lastFall = nil; velocity = .zero
         position = CGPoint(x: bounds.midX, y: floor)
-        web = nil; gripStability.reset(); lastWebSearch = -1; nextSwingTime = elapsed + 4; nextLateralWebTime = elapsed
+        web = nil; swingTarget = nil; transfers = 0; gripStability.reset(); lastWebSearch = -1; nextSwingTime = elapsed + 2.2; nextLateralWebTime = elapsed
         lastSearch = -1; transition(.waiting)
     }
 
@@ -308,7 +336,7 @@ public final class ClimbEngine {
             if position.y <= floor { position.y = floor; velocity = .zero; transition(.recovering) }
         case .recovering:
             if phaseTime > 1.65 { attempt += 1; support = nil; nextHold = nil; lastSearch = -1; transition(.searching) }
-        case .webCasting, .webPulling, .webSwinging: advanceWeb(dt)
+        case .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault: advanceWeb(dt, surfaces: surfaces)
         case .summit, .dragging: break
         }
     }
@@ -345,20 +373,98 @@ public final class ClimbEngine {
 
     private func beginSwing(on surface: Surface) -> Bool {
         guard let anchor = contact(on: surface, near: position.x) else { return false }
-        let side = min(anchor.x - bounds.minX, bounds.maxX - anchor.x) - 44
-        let length = min(158, side, anchor.y - floor - WebMotion.wristHeight - 6)
-        guard length >= 74 else { return false }
+        guard let length = swingLength(at: anchor) else { return false }
         startWeb(on: surface, at: anchor, length: length)
         return true
     }
 
+    private func swingLength(at anchor: CGPoint) -> CGFloat? {
+        let side = min(anchor.x - bounds.minX, bounds.maxX - anchor.x) - 54
+        let length = min(158, side, anchor.y - floor - WebMotion.wristHeight - WebMotion.groundClearance)
+        return length >= 74 ? length : nil
+    }
+
     private func startWeb(on surface: Surface, at anchor: CGPoint, length: CGFloat?) {
-        web = WebMotion(anchor: anchor, body: position, swingLength: length, direction: direction)
+        wristSide = -wristSide
+        web = WebMotion(anchor: anchor, body: position, swingLength: length, direction: direction, wristX: wristSide * 8 * direction)
+        swingTarget = nil; transfers = 0
         support = surface; nextHold = nil; gripStability.reset()
         armedTime = elapsed + 0.45; transition(.webCasting)
     }
 
-    private func advanceWeb(_ dt: Double) {
+    private func nextSwingTarget(in surfaces: [Surface], motion: WebMotion) -> SwingTarget? {
+        let hand = webHand, heading: CGFloat = motion.speed.dx > 0 ? 1 : -1
+        let preferred = CGPoint(x: motion.anchor.x + heading * 215, y: motion.anchor.y + 40)
+        let candidates = surfaces.compactMap { surface -> (Surface, CGFloat, CGFloat)? in
+            let rect = surface.frame
+            guard surface.id != support?.id, rect.width >= 8, rect.height >= 4 else { return nil }
+            let x = min(rect.maxX - 1, max(rect.minX + 1, preferred.x))
+            let dx = (x - hand.x) * heading, dy = rect.midY - hand.y
+            guard dx > 58, (x - motion.anchor.x) * heading >= 125, dy >= 46, dy <= 255,
+                  hypot(dx, dy) <= 350 else { return nil }
+            let newWindow = surface.windowID != nil && support?.windowID != nil && surface.windowID != support?.windowID
+            let score = abs(x - preferred.x) + 0.85 * abs(rect.midY - preferred.y) - (newWindow ? 155 : 0)
+            return (surface, x, score)
+        }.sorted { $0.2 < $1.2 }
+        for (surface, x, _) in candidates {
+            guard let anchor = contact(on: surface, near: x), let length = swingLength(at: anchor),
+                  anchor.y - hand.y >= 40, (anchor.x - hand.x) * heading >= 50,
+                  hypot(anchor.x - hand.x, anchor.y - hand.y) <= 355 else { continue }
+            return SwingTarget(surface: surface, anchor: anchor, length: length)
+        }
+        return nil
+    }
+
+    private func attemptTransfer(_ motion: WebMotion, surfaces: [Surface]) {
+        guard motion.age >= 0.95, abs(motion.speed.dx) > 95, elapsed - lastWebSearch > 0.19 else { return }
+        lastWebSearch = elapsed
+        guard let next = nextSwingTarget(in: surfaces, motion: motion) else { return }
+        swingTarget = next
+        let leap = CGVector(dx: max(-310, min(310, motion.speed.dx)), dy: max(135, min(205, motion.speed.dy + 145)))
+        let t = CGFloat(WebMotion.vaultTime)
+        let landingX = position.x + leap.dx * t
+        let landingY = position.y + leap.dy * t - 0.5 * 690 * t * t
+        let canFlip = transfers % 2 == 1 && height >= 44 && position.y + 85 < bounds.maxY &&
+            landingX > bounds.minX + 48 && landingX < bounds.maxX - 48 && landingY > floor + 44 &&
+            next.anchor.y - landingY > WebMotion.wristHeight + 20
+        if canFlip {
+            web = nil; support = nil; velocity = leap; transition(.webVault)
+        } else { transition(.webHandoff) }
+    }
+
+    private func cancelTransfer(_ reason: FallReason) {
+        swingTarget = nil; lastWebSearch = elapsed
+        if phase == .webVault { fall(reason) }
+        else if phase == .webHandoff { transition(.webSwinging) }
+    }
+
+    private func catchNext(_ target: SwingTarget, speed: CGVector) {
+        let wrist = throwOffset
+        wristSide = -wristSide
+        direction = target.anchor.x >= position.x ? 1 : -1
+        var motion = WebMotion(anchor: target.anchor, body: position, swingLength: target.length,
+                               direction: direction, wristX: wristSide * 8 * direction)
+        motion.catchMovingBody(position, velocity: speed, from: wrist)
+        web = motion; support = target.surface; swingTarget = nil; transfers += 1
+        gripStability.reset(); transition(.webSwinging)
+    }
+
+    private func advanceWeb(_ dt: Double, surfaces: [Surface]) {
+        if let target = swingTarget {
+            guard let fresh = surfaces.first(where: { $0.id == target.surface.id }) else { cancelTransfer(.closed); return }
+            let a = target.surface.frame, b = fresh.frame
+            guard max(abs(a.minX-b.minX),abs(a.minY-b.minY),abs(a.width-b.width),abs(a.height-b.height)) <= 2 else { cancelTransfer(.moved); return }
+        }
+        if phase == .webVault, let target = swingTarget {
+            // Stop exactly at the catch, even if the frame spans it. This is the
+            // same parabola used to assess floor clearance before releasing.
+            let air = min(dt, max(0, WebMotion.vaultTime - (phaseTime - dt)))
+            position.x += velocity.dx * air
+            position.y += velocity.dy * air - 0.5 * 690 * air * air
+            velocity.dy -= 690 * air
+            if phaseTime >= WebMotion.vaultTime { catchNext(target, speed: velocity) }
+            return
+        }
         guard var motion = web else { fall(.erased); return }
         let old = position
         switch phase {
@@ -367,20 +473,24 @@ public final class ClimbEngine {
         case .webPulling:
             let (point, finished) = motion.pulledBody(time: phaseTime)
             position = point
-            if finished {
-                web = nil; gripStability.reset(); transition(.climbing); return
-            }
-        case .webSwinging:
+            if finished { web = nil; gripStability.reset(); transition(.climbing); return }
+        case .webSwinging, .webHandoff:
             guard let length = motion.swingLength else { fall(.erased); return }
-            position = motion.swingingBody(time: phaseTime, dt: dt, length: length)
-            if phaseTime >= 6.8 {
-                motion.start = position; nextSwingTime = elapsed + 5
+            position = motion.swingingBody(dt: dt, length: length, floor: floor)
+            // Ground clearance is enforced through the strand length, not by
+            // displacing or releasing an otherwise supported character.
+            position.x = max(bounds.minX + 43, min(bounds.maxX - 43, position.x))
+            if phase == .webSwinging && motion.age >= 6.8 {
+                motion.start = position; nextSwingTime = elapsed + 4
                 transition(.webPulling)
             }
         default: return
         }
         motion.speed = CGVector(dx: (position.x - old.x) / dt, dy: (position.y - old.y) / dt)
         web = motion
+        if phase == .webHandoff, let target = swingTarget, phaseTime >= WebMotion.handoffTime {
+            catchNext(target, speed: motion.speed)
+        } else if phase == .webSwinging { attemptTransfer(motion, surfaces: surfaces) }
     }
     private func launch(to point: CGPoint) {
         jumpStart = position; jumpEnd = point

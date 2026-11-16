@@ -195,6 +195,18 @@ check("A web lands on ink inside a broad ledge and releases when only that patch
     try expect(hero.lastFall == .erased && hero.webAnchor == nil && !shifted.holds.isEmpty, "Other ink in the same row cannot support the original web")
 }
 
+check("A fresh web chooses a load-bearing patch rather than an isolated noisy pixel") {
+    let hero = webHero()
+    let f = terrain(canvas(1200) { c in
+        c.setFillColor(CGColor(gray:0.02,alpha:1))
+        c.fill(CGRect(x:711,y:355,width:1,height:1))
+        c.fill(CGRect(x:766,y:350,width:22,height:10))
+    })
+    _ = hero.updateGrip(f)
+    try expect(advance(hero, until:.webPulling, surfaces:[webLedge]), "Expected a real ledge")
+    guard let point=hero.webAnchor else {throw CheckFailure(description:"Missing fresh anchor")}
+    try expect(f.hasGrip(near:point,radius:5), "The first unchanged capture must accept the exact point the shot selected")
+}
 check("After climbing Spider-Man swings autonomously in both directions on one fixed anchor") {
     let hero = webHero()
     try expect(advance(hero, until: .webSwinging, surfaces: [webLedge]), "One overhead ledge should eventually support a free swing")
@@ -241,6 +253,84 @@ check("Pause, pickup and switching character do not leave an orphaned web") {
     try expect(advance(other, until: .webPulling, surfaces: [webLedge]), "Expected a zip")
     other.webEnabled = false
     try expect(other.webAnchor == nil && other.phase == .falling, "Switching away in midair releases the web immediately")
+}
+let skyline: [Surface] = [280, 480, 680, 880, 1060].enumerated().map { i, x in
+    var ledge = Surface(id: UInt32(930 + i), frame: CGRect(x: x, y: 335 + 10 * (i % 2), width: 68, height: 12))
+    ledge.windowID = UInt32(41 + i)
+    return ledge
+}
+check("Forward swings can chain three real anchors with alternating wrists and a free flip") {
+    let hero = webHero()
+    var catches: [UInt32] = [], wrist: CGFloat?, sawTwo = false, free = false, castAfterFlip = false
+    var biggestStep: CGFloat = 0
+    for _ in 0..<2100 {
+        let previous = hero.position, before = hero.phase
+        hero.step(1/60, surfaces: skyline, mouse: nil)
+        biggestStep = max(biggestStep, hypot(hero.position.x - previous.x, hero.position.y - previous.y))
+        if hero.phase == .webHandoff && hero.strands.count == 2 {
+            let a = hero.strands[0], b = hero.strands[1]
+            try expect(a.attached && !b.attached && hypot(a.hand.x-b.hand.x, a.hand.y-b.hand.y) > 5, "The incoming silk must leave a different wrist")
+            sawTwo = true
+        }
+        if hero.phase == .webVault {
+            if hero.flipProgress > 0.1 && hero.flipProgress < 0.9 && hero.strands.isEmpty { free = true }
+            if free && hero.flipProgress == 1 && hero.strands.count == 1 { castAfterFlip = true }
+        }
+        if [.webHandoff,.webVault].contains(before) && hero.phase == .webSwinging, let hold = hero.support, let anchor = hero.webAnchor {
+            try expect(hold.frame.contains(anchor), "Each catch must land on the real destination")
+            if let wrist { try expect(wrist != hero.wristSide, "Each catch switches leading wrist") }
+            wrist = hero.wristSide; catches.append(hold.id)
+        }
+        if Set(catches).count >= 3 && castAfterFlip { break }
+    }
+    try expect(sawTwo && Set(catches).count >= 2 && castAfterFlip && biggestStep < 18,
+               "Expected double cast, airborne tuck, recatch and no teleport: catches=\(catches), two=\(sawTwo), flip=\(castAfterFlip), step=\(biggestStep)")
+}
+check("Losing only the incoming anchor aborts a handoff but preserves the old silk") {
+    let hero = webHero()
+    try expect(advance(hero, until: .webHandoff, surfaces: skyline), "Expected a real handoff")
+    guard let old = hero.support else { throw CheckFailure(description: "Lost the original support early") }
+    hero.step(1/60, surfaces: [old], mouse: nil)
+    try expect(hero.phase == .webSwinging && hero.support?.id == old.id && hero.strands.count == 1, "The old attached strand must still carry the hero")
+}
+check("Erasing a future anchor in free flight or picking up a double cast clears every strand") {
+    let hero = webHero()
+    try expect(advance(hero, until: .webVault, surfaces: skyline), "Expected an airborne switch")
+    _ = hero.updateGrip(terrain(canvas(1200) { _ in }))
+    try expect(hero.phase == .falling && hero.lastFall == .erased && hero.strands.isEmpty, "No current web exists to save the fall")
+    let other = webHero()
+    try expect(advance(other, until: .webHandoff, surfaces: skyline), "Expected the second strand")
+    other.step(1/60, surfaces: skyline, mouse: nil)
+    other.beginDrag()
+    try expect(other.phase == .dragging && other.strands.isEmpty, "Dragging must clear both the loaded and incoming silk")
+}
+check("A long incoming strand cannot cause a fall or floor scrape on a stable low skyline") {
+    var catches = 0, flips = 0, groundReleases = 0
+    var lowest = CGFloat.infinity
+    for height in [165, 185, 205, 235, 265, 305] {
+        for gap in [135, 185, 230, 280] {
+            var ledges: [Surface] = []
+            for i in -2...2 {
+                let x = CGFloat(580 + i * gap), y = CGFloat(height + (i % 2) * 8)
+                let rect = CGRect(x: x, y: y, width: 58, height: 10)
+                ledges.append(Surface(id: UInt32(1105 + i), frame: rect))
+            }
+            for (rate, speed) in [(60, 1.0), (20, 2.0)] {
+                let hero = webHero(); hero.speed = speed
+                for _ in 0..<(rate * 15) {
+                    let before = hero.phase
+                    hero.step(1 / Double(rate), surfaces: ledges, mouse: nil)
+                    if [.webSwinging, .webHandoff, .webVault].contains(hero.phase) { lowest = min(lowest, hero.height) }
+                    if hero.phase == .webSwinging && [.webHandoff,.webVault].contains(before) { catches += 1 }
+                    if hero.phase == .webVault && before != .webVault { flips += 1 }
+                    if hero.phase == .falling && before != .falling && hero.lastFall == .manual { groundReleases += 1 }
+                }
+            }
+        }
+    }
+    print(String(format: "      48 low routes: %d catches, %d flips, %d false falls, %.2f pt minimum clearance", catches, flips, groundReleases, Double(lowest)))
+    try expect(catches > 15 && flips > 0 && groundReleases == 0 && lowest >= 7,
+               "catches=\(catches) flips=\(flips) premature ground releases=\(groundReleases) lowest clearance=\(lowest)")
 }
 check("Picking the character up detaches it without counting a fall") {
     let e = try attached(); e.beginDrag()

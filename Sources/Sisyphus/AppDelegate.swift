@@ -114,6 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .webCasting: return "正在发射蛛丝"
         case .webPulling: return "正在用蛛丝跨越空档"
         case .webSwinging: return "正在荡蛛丝"
+        case .webHandoff: return "正在交替换丝"
+        case .webVault: return "正在翻身接丝"
         case .falling: return "正在掉落"
         default: return engine.phase.attached ? "正在攀爬" : "正在寻找可抓的位置"
         }
@@ -124,8 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let usable = field.holds.filter { $0.minY > engine.floor + 34 && $0.maxY < engine.bounds.maxY - 28 }
         let retained = hoverFrozen ? engine.support : engine.updateGrip(field)
         holds = registry.update(usable)
-        if let retained { holds.removeAll { $0.id == retained.id }; holds.append(retained) }
         capturedWindows = tracker.surfaces(on: screen)
+        if engine.webEnabled {
+            for index in holds.indices {
+                let r = holds[index].frame
+                holds[index].windowID = capturedWindows.first { $0.frame.contains(CGPoint(x: r.midX, y: r.midY)) }?.id
+            }
+        }
+        if let retained { holds.removeAll { $0.id == retained.id }; holds.append(retained) }
     }
 
     private func validateParentWindow() {

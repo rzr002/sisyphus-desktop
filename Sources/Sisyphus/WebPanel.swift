@@ -19,25 +19,28 @@ final class WebPanel: NSPanel {
     }
 
     func update(_ engine: ClimbEngine, origin: CGPoint, behind character: NSWindow) {
-        guard let tip = engine.webTip else { if isVisible { orderOut(nil) }; return }
-        let hand = engine.webHand
-        let box = CGRect(x: min(hand.x,tip.x) - 7, y: min(hand.y,tip.y) - 7,
-                         width: abs(hand.x - tip.x) + 14, height: abs(hand.y - tip.y) + 14)
-        let localHand = CGPoint(x: hand.x - box.minX, y: hand.y - box.minY)
-        let localTip = CGPoint(x: tip.x - box.minX, y: tip.y - box.minY)
+        let strands = engine.strands
+        guard !strands.isEmpty else { if isVisible { orderOut(nil) }; return }
+        let points = strands.flatMap { [$0.hand, $0.tip] }
+        let box = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -7, dy: -7).integral
         setFrame(box.offsetBy(dx: origin.x, dy: origin.y), display: false)
-        silk.hand = localHand; silk.tip = localTip
-        silk.attached = engine.phase != .webCasting; silk.needsDisplay = true
+        silk.strands = strands; silk.localOrigin = box.origin; silk.needsDisplay = true
         if !isVisible { order(.below, relativeTo: character.windowNumber) }
     }
 
     private final class SilkView: NSView {
-        var hand = CGPoint.zero, tip = CGPoint.zero
-        var attached = false
+        var strands: [WebStrand] = []
+        var localOrigin = CGPoint.zero
         override var isOpaque: Bool { false }
         override func draw(_ dirtyRect: NSRect) {
             guard let c = NSGraphicsContext.current?.cgContext else { return }
             c.clear(dirtyRect)
+            c.saveGState(); defer { c.restoreGState() }
+            c.translateBy(x: -localOrigin.x, y: -localOrigin.y)
+            for strand in strands { draw(strand, in: c) }
+        }
+        private func draw(_ strand: WebStrand, in c: CGContext) {
+            let hand = strand.hand, tip = strand.tip, attached = strand.attached
             let line = CGMutablePath(); line.move(to: hand)
             line.addQuadCurve(to: tip, control: CGPoint(x: (hand.x + tip.x) * 0.5, y: (hand.y + tip.y) * 0.5 - (attached ? 1 : 5)))
             if attached {

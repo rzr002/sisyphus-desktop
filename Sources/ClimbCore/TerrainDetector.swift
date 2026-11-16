@@ -35,7 +35,10 @@ public struct PixelTerrain {
             for x in x0...x1 where edges[y * width + x] != 0 {
                 let p = CGPoint(x: origin.x + (CGFloat(x) + 0.5) / sx, y: top - (CGFloat(y) + 0.5) / sy)
                 let dx = p.x - point.x, dy = p.y - point.y
-                if dx * dx + dy * dy < squared { squared = dx * dx + dy * dy; best = p }
+                let distance = dx * dx + dy * dy
+                // A one-pixel speck can share a ledge with real ink. Do not fire
+                // at a point that the very next unchanged frame would reject.
+                if distance < squared, hasGrip(near: p, radius: 5) { squared = distance; best = p }
             }
         }
         return best

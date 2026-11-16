@@ -8,7 +8,7 @@
 
 ## 蜘蛛侠
 
-红蓝制服、白色目镜与面罩蛛网纹取材自 Marvel 的 Spider-Man。游戏使用 Core Graphics 在运行时绘制这个非官方 Q 版形象。攀爬时显示背面的蜘蛛纹样，转入拉索或摆荡时露出目镜，一只手举过头顶。角色的手腕和屏幕上的蛛丝使用同一个坐标。绘制实现见 [SpiderArt.swift](../Sources/Sisyphus/SpiderArt.swift)。
+红蓝制服、白色目镜与面罩蛛网纹取材自 Marvel 的 Spider-Man。游戏使用 Core Graphics 在运行时绘制这个非官方 Q 版形象。攀爬时显示背面的蜘蛛纹样，拉索时身体前倾，摆到弧线底部时双腿一收一放。换手时两只手各连一根丝，翻身时双膝收紧，重新瞄准后才伸出手臂。每根蛛丝与相应手腕使用同一个坐标。绘制实现见 [SpiderArt.swift](../Sources/Sisyphus/SpiderArt.swift)。
 
 ## 原版攀登者
 

@@ -11,7 +11,8 @@ enum SpiderArt {
     private static let redDark = NSColor.rgb(0xAB3349).cgColor
     private static let silk = NSColor.rgb(0x843449).cgColor
 
-    static func draw(in c: CGContext, phase: Phase, time: Double, facing: CGFloat, angle: CGFloat) {
+    static func draw(in c: CGContext, phase: Phase, time: Double, facing: CGFloat, angle: CGFloat,
+                     wristSide: CGFloat, grip: CGPoint, aim: CGPoint, flip: CGFloat) {
         let walking = phase == .searching || phase == .walking
         let climbing = [.climbing, .reaching, .traversing].contains(phase)
         let tethered = phase.usesWeb
@@ -20,8 +21,13 @@ enum SpiderArt {
         c.saveGState()
         defer { c.restoreGState() }
         c.translateBy(x: pivot.x, y: pivot.y)
-        if tethered {
-            c.translateBy(x: 0, y: 37); c.rotate(by: max(-0.26, min(0.26, angle * 0.32))); c.translateBy(x: 0, y: -37)
+        if phase == .webVault {
+            let eased = flip * flip * (3 - 2 * flip)
+            c.rotate(by: -facing * 2 * .pi * eased)
+        } else if phase == .webSwinging || phase == .webPulling {
+            // Pivot around the moving, load-bearing wrist: the ink touches the line even in a hard lean.
+            let lean = phase == .webPulling ? facing * 0.22 : max(-0.24, min(0.24, angle * 0.34))
+            c.translateBy(x: grip.x, y: grip.y); c.rotate(by: lean); c.translateBy(x: -grip.x, y: -grip.y)
         } else if walking {
             c.translateBy(x: 0, y: -5 + 1.5 * abs(wave))
         } else if phase == .recovering {
@@ -47,12 +53,45 @@ enum SpiderArt {
         }
         let leftHand: CGPoint, rightHand: CGPoint, leftKnee: CGPoint, rightKnee: CGPoint
         let leftFoot: CGPoint, rightFoot: CGPoint
+        var leftElbow = p(-14, 0), rightElbow = p(14, 0)
         if tethered {
-            leftHand = p(0, 37)
-            rightHand = phase == .webCasting ? p(21, 12) : p(18, 8 + wave * 1.4)
-            leftKnee = p(-12, -19); rightKnee = p(17, -13)
-            leftFoot = p(-6, -32); rightFoot = p(20, -23)
+            let active = p(grip.x * facing, grip.y)
+            let shooting = p(aim.x * facing, aim.y)
+            let freeSide = -wristSide
+            let loaded: CGPoint, free: CGPoint
+            let tilt = sin(angle) * facing
+            switch phase {
+            case .webVault:
+                let open = max(0, min(1, (flip - 0.72) / 0.28))
+                loaded = p(wristSide * (9 + 11 * open), -3 + 8 * open)
+                free = p(freeSide * 10 * (1-open) + shooting.x * open, -4 * (1-open) + shooting.y * open)
+                leftKnee = p(-13 - 4 * open, -3 - 9 * open); rightKnee = p(14, -1 - 10 * open)
+                leftFoot = p(-4 - 16 * open, -11 - 10 * open); rightFoot = p(4 + 10 * open, -8 - 15 * open)
+            case .webPulling:
+                loaded = active; free = p(-23, -7)
+                leftKnee = p(-16, -13); rightKnee = p(12, -8)
+                leftFoot = p(-25, -22); rightFoot = p(2, -19)
+            case .webCasting:
+                loaded = active; free = p(freeSide * 22, -3)
+                leftKnee = p(-18, -12); rightKnee = p(15, -9)
+                leftFoot = p(-13, -23); rightFoot = p(20, -17)
+            case .webHandoff:
+                loaded = active; free = shooting
+                leftKnee = p(-16, -17); rightKnee = p(17, -6)
+                leftFoot = p(-21, -29); rightFoot = p(8, -15)
+            default:
+                loaded = active; free = p(freeSide * (21 + wave * 2), 2 + 8 * tilt + wave * 4)
+                leftKnee = p(-13 - 4 * tilt, -16 + 5 * tilt); rightKnee = p(15 + 3 * tilt, -9 - 4 * tilt)
+                leftFoot = p(-10 - 9 * tilt, -28 + 8 * tilt); rightFoot = p(8 + 6 * tilt, -19 - 5 * tilt)
+            }
+            leftHand = wristSide < 0 ? loaded : free; rightHand = wristSide < 0 ? free : loaded
+            func elbow(_ hand: CGPoint, _ side: CGFloat) -> CGPoint {
+                // A bent, outward elbow clearly separates the two arms on a 96-point sprite.
+                p(0.55 * hand.x + side * (phase == .webVault && flip < 0.8 ? 5 : 11), 0.5 * hand.y + 2)
+            }
+            leftElbow = elbow(leftHand, -1); rightElbow = elbow(rightHand, 1)
         } else if climbing {
+            leftElbow = p(-22, 19); rightElbow = p(21, 13)
             leftHand = p(-19, 25 + wave * 6); rightHand = p(19, 25 - wave * 6)
             leftKnee = p(-14, -18 - wave * 4); rightKnee = p(14, -18 + wave * 4)
             leftFoot = p(-12, -27 - wave * 4); rightFoot = p(12, -27 + wave * 4)
@@ -89,9 +128,8 @@ enum SpiderArt {
             }
         }
         stroke([p(0,-1),p(0,-5)], emblem, 2.6)
-        let raised = tethered || climbing
-        limb(p(-7,2), p(raised ? -22 : -14, raised ? 19 : 0), leftHand, 5.1, false)
-        limb(p(7,2), p(raised ? 21 : 14, raised ? 13 : 0), rightHand, 5.3, false)
+        limb(p(-7,2), leftElbow, leftHand, 5.1, false)
+        limb(p(7,2), rightElbow, rightHand, 5.3, false)
         let head = CGMutablePath()
         head.move(to: p(0,4))
         head.addCurve(to: p(-16.5,20), control1: p(-5,4), control2: p(-15,11))

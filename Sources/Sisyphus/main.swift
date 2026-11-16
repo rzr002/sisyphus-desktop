@@ -13,6 +13,7 @@ if CommandLine.arguments.contains("--verify-native") {
     NativeChecks.run()
 }
 #endif
+guard let instance = SingleInstance.claimGame() else { exit(0) }
 let delegate = AppDelegate()
 app.delegate = delegate
-withExtendedLifetime(delegate) { app.run() }
+withExtendedLifetime((delegate, instance)) { app.run() }

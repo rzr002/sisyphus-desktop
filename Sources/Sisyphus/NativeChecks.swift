@@ -132,25 +132,37 @@ enum NativeChecks {
             AppearanceLibrary(defaults: defaults, directory: skinRoot).selectedID == AppearanceLibrary.spiderID
         let thread = WebPanel()
         checks["webPanelPassesClicksThrough"] = thread.ignoresMouseEvents && !thread.canBecomeKey && !thread.canBecomeMain
-        var completePoses = true
-        for phase: Phase in [.climbing, .webCasting, .webPulling, .webSwinging, .falling, .recovering] {
-            for side: CGFloat in [-1, 1] {
-                let bitmap = CGContext(data: nil, width: 144, height: 160, bitsPerComponent: 8, bytesPerRow: 576,
-                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-                bitmap.translateBy(x: 24, y: 24)
-                SpiderArt.draw(in: bitmap, phase: phase, time: 0.6, facing: side, angle: side * 0.92)
-                let pixels = bitmap.data!.assumingMemoryBound(to: UInt8.self)
-                var visible = 0
-                for y in 0..<160 {
-                    for x in 0..<144 where pixels[(y * 144 + x) * 4 + 3] > 20 {
-                        visible += 1
-                        if !(24..<120).contains(x) || !(24..<136).contains(y) { completePoses = false }
+        var completePoses = true, silhouettes = Set<UInt64>()
+        for phase: Phase in [.climbing, .webCasting, .webPulling, .webSwinging, .webHandoff, .webVault, .falling, .recovering] {
+            for side: CGFloat in [-1, 1] { for wrist: CGFloat in [-1, 1] {
+                for flip: CGFloat in (phase == .webVault ? [0.0, 0.25, 0.5, 0.75, 1.0] : [0.0]) {
+                    let bitmap = CGContext(data: nil, width: 144, height: 160, bitsPerComponent: 8, bytesPerRow: 576,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                    bitmap.translateBy(x: 24, y: 24)
+                    SpiderArt.draw(in: bitmap, phase: phase, time: 0.6, facing: side, angle: side * 0.92,
+                                  wristSide: wrist, grip: CGPoint(x: wrist * side * 8, y: 37),
+                                  aim: CGPoint(x: -wrist * side * 27, y: 23), flip: flip)
+                    let pixels = bitmap.data!.assumingMemoryBound(to: UInt8.self)
+                    var visible = 0, fingerprint: UInt64 = 0
+                    for y in 0..<160 {
+                        for x in 0..<144 where pixels[(y * 144 + x) * 4 + 3] > 20 {
+                            visible += 1; fingerprint = fingerprint &* 31 &+ UInt64(y * 144 + x)
+                            if !(24..<120).contains(x) || !(24..<136).contains(y) { completePoses = false }
+                        }
                     }
+                    if phase.usesWeb && side == 1 && wrist == -1 { silhouettes.insert(fingerprint) }
+                    if visible < 650 { completePoses = false }
                 }
-                if visible < 650 { completePoses = false }
-            }
+            } }
         }
         checks["spiderPosesVisibleAndUnclipped"] = completePoses
+        checks["webActionsHaveDistinctSilhouettes"] = silhouettes.count == 9
+        let lockURL = FileManager.default.temporaryDirectory.appendingPathComponent("sisyphus-check-" + UUID().uuidString)
+        var first = SingleInstance(lockURL: lockURL)
+        checks["secondDesktopCharacterIsRefused"] = first != nil && SingleInstance(lockURL: lockURL) == nil
+        first = nil
+        checks["gameCanLaunchAgainAfterQuit"] = SingleInstance(lockURL: lockURL) != nil
+        try? FileManager.default.removeItem(at: lockURL)
         var screenHoldCount = -1
         if CGPreflightScreenCaptureAccess() {
             let source = ScreenTerrainSource()
