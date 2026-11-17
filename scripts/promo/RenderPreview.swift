@@ -45,7 +45,7 @@ import UniformTypeIdentifiers
         let start=write ? Int((Double(args[2])! * 60).rounded()) : 0
         let count=write ? Int((Double(args[3])! * 60).rounded()) : 60*75
         var outputFrame=0, near: CGFloat=0, far: CGFloat=2
-        if drop { hero.beginDrag(); hero.drag(to:CGPoint(x:537,y:432)) }
+        if drop { hero.beginDrag(); hero.drag(to:CGPoint(x:170,y:400)) }
         for frame in 0..<(start+count) {
             if drop && frame == 16 { hero.endDrag() }
             if frame % 6 == 0 { _ = hero.updateGrip(field) }

@@ -96,7 +96,8 @@ struct WebMotion {
 struct SwingTarget {
     let surface: Surface
     let anchor: CGPoint
-    let length: CGFloat
+    /// A swing needs a safe pendulum length. A zip reels all the way to the ledge.
+    let length: CGFloat?
 }
 
 /// Geometry for the two strands currently visible to the renderer.

@@ -337,6 +337,7 @@ check("Picking the character up detaches it without counting a fall") {
     try expect(e.phase == .dragging && e.support == nil && e.falls == 0, "Dragging should deliberately release support")
 }
 checkWebTricks()
+checkWebRoutes()
 checkWebRescue()
 checkSpiderPerspective()
 checkDesktopCaptureAccess()
@@ -367,10 +368,11 @@ check("Closing a menu or finishing a drag does not trigger mouse interference") 
     pointer.protect(after: 10.1)
     try expect(!pointer.update(inside: false, now: 10.15).disturb, "Explicit interactions must be protected")
 }
-func canvas(_ size: Int = 320, _ draw: (CGContext) -> Void) -> CGImage {
-    let c = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+func canvas(_ width: Int = 320, height: Int? = nil, _ draw: (CGContext) -> Void) -> CGImage {
+    let height = height ?? width
+    let c = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    c.setFillColor(CGColor(gray: 0.95, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: size, height: size))
+    c.setFillColor(CGColor(gray: 0.95, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: width, height: height))
     draw(c); return c.makeImage()!
 }
 func terrain(_ image: CGImage) -> PixelTerrain { TerrainDetector.analyze(image, logicalSize: CGSize(width: image.width, height: image.height)) }
