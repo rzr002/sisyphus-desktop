@@ -42,7 +42,7 @@ Swift、AppKit 和 ScreenCaptureKit 在主显示器上比较相邻像素的颜�
 <details>
 <summary>人物一直待在地面</summary>
 
-右键小人可以打开录屏权限设置。若你主动停止过共享，可以选择「重新连接桌面」。如果刚升级后开关已经打开但仍不能读取，临时签名可能只对应旧版。此时只需移除列表里的 Sisyphus，重新添加「应用程序」里的这一份，并按系统提示重新打开。发布者可以在历次打包时设置同一团队的 `CODESIGN_IDENTITY`（Developer ID Application），让 macOS 识别后续升级。[Apple 对签名身份的说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
+若你主动停止过共享，右键小人选「重新连接桌面」。如果已经给过录屏权限，先退出小人，再打开当时授权的那份 App。源码目录和「应用程序」里可能各有一份同名的 Sisyphus。预览版使用临时签名，换成另一份构建可能需要单独授权。要启用新版，可以从新版小人的右键菜单进入录屏权限设置。发布者在历次打包时使用同一团队的 Developer ID Application 签名（`CODESIGN_IDENTITY`），可让 macOS 在升级后继续识别这款 App。[Apple 对签名身份的说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
 
 如果桌面读取正常，把一行对比明显的文字移到屏幕底部附近。普通角色要先从地面够到第一处支点；蜘蛛侠也需要射程内有真实边缘。
 </details>
@@ -55,8 +55,10 @@ Swift、AppKit 和 ScreenCaptureKit 在主显示器上比较相邻像素的颜�
 git clone https://github.com/rzr002/sisyphus-desktop.git
 cd sisyphus-desktop
 bash scripts/build-app.sh
-open dist/Sisyphus.app
+./启动游戏.command
 ```
+
+以后双击项目里的 `启动游戏.command` 即可。它会复用已有的 `dist/Sisyphus.app`。如果「应用程序」里有另一版正在运行，会先退出那一版，再打开项目版。
 
 核心检查用 `bash scripts/swift-local.sh run ClimbChecks`。原生窗口、真实屏幕读取和发布包的验证方法见 [验证记录](docs/VERIFICATION.md)。
 
